@@ -3,6 +3,7 @@
 All review requests go through Masumi payment flow. No free/standalone access.
 """
 
+import json
 import logging
 import os
 import time
@@ -102,6 +103,38 @@ async def start_job(data: StartJobRequest):
             raise HTTPException(
                 status_code=400,
                 detail="'aikido_report' is required in input_data.",
+            )
+
+        if "source_files" not in input_data_dict:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "'source_files' is required in input_data. "
+                    "Provide a JSON object mapping file paths to source code contents "
+                    '(e.g. {"validators/main.ak": "validator main { ... }"}). '
+                    "Without source code the reviewer cannot verify findings against your actual contract."
+                ),
+            )
+
+        # Validate both are valid JSON before creating a payment request
+        try:
+            report_data = json.loads(input_data_dict["aikido_report"])
+            if not isinstance(report_data, dict) or "findings" not in report_data:
+                raise ValueError("Missing 'findings' key")
+        except (json.JSONDecodeError, ValueError) as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'aikido_report' must be valid Aikido JSON (aikido.findings.v1): {e}",
+            )
+
+        try:
+            source_data = json.loads(input_data_dict["source_files"])
+            if not isinstance(source_data, dict) or len(source_data) == 0:
+                raise ValueError("Must contain at least one file entry")
+        except (json.JSONDecodeError, ValueError) as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'source_files' must be a non-empty JSON object mapping file paths to source code: {e}",
             )
 
         payment_amount = int(os.getenv("PAYMENT_AMOUNT", "5000000"))  # 5 ADA default
@@ -238,10 +271,12 @@ async def input_schema():
                 "id": "aikido_report",
                 "type": "string",
                 "name": "Aikido JSON Report",
+                "required": True,
                 "data": {
                     "description": (
-                        "The full JSON output from an Aikido scan "
-                        "(aikido.findings.v1 schema)"
+                        "REQUIRED. The full JSON output from an Aikido scan "
+                        "(aikido.findings.v1 schema). Run 'aikido scan --format json' "
+                        "to generate this."
                     ),
                     "placeholder": '{"schema_version": "aikido.findings.v1", ...}',
                 },
@@ -250,9 +285,13 @@ async def input_schema():
                 "id": "source_files",
                 "type": "string",
                 "name": "Source Code Files (JSON dict)",
+                "required": True,
                 "data": {
                     "description": (
-                        "A JSON object mapping file paths to source code contents. "
+                        "REQUIRED. A JSON object mapping file paths to source code "
+                        "contents. The reviewer needs your actual Aiken source code to "
+                        "verify findings against real contract logic. Without it, "
+                        "classifications cannot be accurate. "
                         'Example: {"validators/foo.ak": "validator foo { ... }"}'
                     ),
                     "placeholder": '{"validators/main.ak": "..."}',

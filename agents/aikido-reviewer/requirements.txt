@@ -9,7 +9,6 @@ httpx
 # Masumi payment integration
 masumi==0.1.39
 requests
-cuid2
 
 # Kodosumi runtime (optional — for scaling)
 kodosumi
