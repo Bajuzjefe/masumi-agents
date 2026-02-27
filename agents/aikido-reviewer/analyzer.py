@@ -90,12 +90,13 @@ def heuristic_classify(finding: AikidoFinding) -> FindingReview:
                 reviewer_confidence = 0.9
                 reasoning_parts.append("Corroborated evidence with definite confidence — multiple analysis lanes agree.")
 
-        # Simulation rejection = counter-evidence
+        # Simulation rejection = counter-evidence (but don't downgrade a CONFIRMED_FP)
         if evidence.witness and isinstance(evidence.witness, dict):
             rejection = evidence.witness.get("rejection_error")
             if rejection:
-                classification = Classification.LIKELY_FP
-                reviewer_confidence = 0.75
+                if classification != Classification.CONFIRMED_FP:
+                    classification = Classification.LIKELY_FP
+                    reviewer_confidence = 0.75
                 reasoning_parts.append(
                     f"Simulation rejected the exploit: {rejection[:120]}. "
                     "The validator appears to catch this scenario."
@@ -272,7 +273,7 @@ async def _review_batch(
             # Parse JSON array
             if text.startswith("```"):
                 lines = text.splitlines()
-                text = "\n".join(l for l in lines if not l.strip().startswith("```"))
+                text = "\n".join(line for line in lines if not line.strip().startswith("```"))
 
             try:
                 results = json.loads(text)
@@ -330,7 +331,17 @@ async def analyze_findings(
             reviews.append(review)
         return reviews
 
-    # Standard and deep modes use LLM
+    # Standard and deep modes require an API key
+    if not anthropic_credential:
+        logger.warning("ANTHROPIC_API_KEY not set — falling back to quick (heuristic) mode")
+        reviews = []
+        for i, finding in enumerate(findings):
+            review = heuristic_classify(finding)
+            review.finding_index = i
+            review.reasoning = "[No API key, heuristic fallback] " + review.reasoning
+            reviews.append(review)
+        return reviews
+
     client = anthropic.AsyncAnthropic(api_key=anthropic_credential)
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
@@ -420,7 +431,7 @@ async def _correlation_pass(
             text = response.content[0].text.strip()
             if text.startswith("```"):
                 lines = text.splitlines()
-                text = "\n".join(l for l in lines if not l.strip().startswith("```"))
+                text = "\n".join(line for line in lines if not line.strip().startswith("```"))
 
             updated = json.loads(text) if text.startswith("[") else []
 

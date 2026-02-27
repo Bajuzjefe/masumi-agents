@@ -1,0 +1,8 @@
+# Kodosumi / Ray Serve main configuration
+proxy_location: EveryNode
+http_options:
+  host: 127.0.0.1
+  port: 8001
+logging_config:
+  encoding: TEXT
+  log_level: INFO

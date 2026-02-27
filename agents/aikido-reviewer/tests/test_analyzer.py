@@ -162,3 +162,21 @@ class TestHeuristicClassification:
         )
         review = heuristic_classify(finding)
         assert any("protocol" in p.lower() for p in review.mitigating_patterns)
+
+    def test_confirmed_fp_not_overwritten_by_simulation_rejection(self):
+        """HIGH_FP_DETECTOR classification should survive simulation rejection."""
+        finding = _make_finding(
+            detector="missing-min-ada-check",
+            severity="info",
+            confidence="possible",
+            evidence=EvidenceInfo(
+                level="PatternMatch",
+                method="tx-simulation-rejected",
+                details="Exploit rejected",
+                witness={"rejection_error": "UPLC evaluation failed"},
+                confidence_boost=0.0,
+            ),
+        )
+        review = heuristic_classify(finding)
+        assert review.classification == Classification.CONFIRMED_FP
+        assert "rejected" in review.reasoning.lower()

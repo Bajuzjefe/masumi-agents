@@ -1,0 +1,54 @@
+# Masumi node services for local development and Preprod testing.
+# Spins up the Payment Service, Registry Service, and Postgres.
+#
+# Usage:
+#   cp .env.masumi.example .env.masumi
+#   # Fill in BLOCKFROST_API_KEY_PREPROD and ADMIN_KEY
+#   docker compose up -d
+#   # Admin dashboard: http://localhost:3001/admin
+#   # Registry docs:   http://localhost:3000/docs
+#   # Payment docs:    http://localhost:3001/docs
+
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: masumi
+      POSTGRES_PASSWORD: masumi_dev
+      POSTGRES_DB: masumi_payment
+    ports:
+      - "5432:5432"
+    volumes:
+      - masumi_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U masumi"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  payment-service:
+    image: ghcr.io/masumi-network/masumi-payment-service:latest
+    env_file: .env.masumi
+    environment:
+      DATABASE_URL: postgresql://masumi:masumi_dev@postgres:5432/masumi_payment
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  registry-service:
+    image: ghcr.io/masumi-network/masumi-registry-service:latest
+    env_file: .env.masumi
+    environment:
+      DATABASE_URL: postgresql://masumi:masumi_dev@postgres:5432/masumi_payment
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  masumi_pgdata:

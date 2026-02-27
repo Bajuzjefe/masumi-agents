@@ -15,15 +15,17 @@ logger = logging.getLogger(__name__)
 def process_job(input_data: dict) -> dict:
     """Masumi start_job_handler — synchronous wrapper around async pipeline.
 
+    Only safe to call from synchronous context (not inside an existing event loop).
+
     input_data keys:
         aikido_report: str — JSON string of aikido.findings.v1 report
         source_files: str — JSON string of {path: source_code} dict
         review_depth: str — "quick" | "standard" | "deep" (default: "standard")
     """
-    return asyncio.run(_process_job_async(input_data))
+    return asyncio.run(process_job_async(input_data))
 
 
-async def _process_job_async(input_data: dict) -> dict:
+async def process_job_async(input_data: dict) -> dict:
     """Async pipeline: parse → analyze → build report → serialize."""
     # Parse inputs
     aikido_json = input_data.get("aikido_report", "")
@@ -47,8 +49,10 @@ async def _process_job_async(input_data: dict) -> dict:
     try:
         source_files = json.loads(source_json) if isinstance(source_json, str) else source_json
         if not isinstance(source_files, dict):
+            logger.warning("source_files is not a dict, ignoring")
             source_files = {}
-    except Exception:
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.warning("Failed to parse source_files: %s — proceeding without source context", e)
         source_files = {}
 
     logger.info(

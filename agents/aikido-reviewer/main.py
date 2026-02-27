@@ -6,8 +6,9 @@ import os
 import sys
 import time
 import uuid
+from typing import List
 
-from agent import process_job
+from agent import process_job, process_job_async
 
 # Standalone mode: skip heavy dependencies
 if len(sys.argv) > 1 and sys.argv[1] == "standalone":
@@ -69,7 +70,7 @@ class InputDataItem(BaseModel):
 
 
 class StartJobRequest(BaseModel):
-    input_data: list[InputDataItem]
+    input_data: List[InputDataItem]
 
     class Config:
         json_schema_extra = {
@@ -88,9 +89,9 @@ class StartJobRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 async def execute_agentic_task(input_data: dict) -> dict:
-    """Execute the aikido review task."""
+    """Execute the aikido review task (async-safe)."""
     logger.info("Starting aikido review task")
-    result = process_job(input_data)
+    result = await process_job_async(input_data)
     logger.info("Aikido review task completed")
     return result
 
@@ -322,5 +323,5 @@ async def standalone_review(data: StartJobRequest):
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8011"))
-    print(f"Starting Aikido Audit Reviewer on {host}:{port}")
+    logger.info("Starting Aikido Audit Reviewer on %s:%d", host, port)
     uvicorn.run(app, host=host, port=port)
