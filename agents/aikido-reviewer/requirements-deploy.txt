@@ -1,0 +1,11 @@
+# Core
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+python-dotenv
+anthropic
+httpx
+
+# Masumi payment integration
+masumi==0.1.39
+requests

@@ -1,0 +1,7 @@
+[build]
+dockerfilePath = "agents/aikido-reviewer/Dockerfile"
+builder = "dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
