@@ -1,54 +1,112 @@
 # Masumi node services for local development and Preprod testing.
-# Spins up the Payment Service, Registry Service, and Postgres.
+# Based on: https://github.com/masumi-network/masumi-services-dev-quickstart
 #
 # Usage:
 #   cp .env.masumi.example .env.masumi
-#   # Fill in BLOCKFROST_API_KEY_PREPROD and ADMIN_KEY
+#   # Fill in BLOCKFROST_API_KEY_PREPROD, ADMIN_KEY, ENCRYPTION_KEY
 #   docker compose up -d
 #   # Admin dashboard: http://localhost:3001/admin
 #   # Registry docs:   http://localhost:3000/docs
 #   # Payment docs:    http://localhost:3001/docs
 
-version: "3.8"
-
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: masumi
-      POSTGRES_PASSWORD: masumi_dev
-      POSTGRES_DB: masumi_payment
+  registry-service:
+    image: ghcr.io/masumi-network/masumi-registry-service:0.22.0
+    container_name: masumi-registry-service
     ports:
-      - "5432:5432"
-    volumes:
-      - masumi_pgdata:/var/lib/postgresql/data
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres-registry:5432/postgres?schema=public
+      - ADMIN_KEY=${ADMIN_KEY}
+      - BLOCKFROST_API_KEY_PREPROD=${BLOCKFROST_API_KEY_PREPROD}
+      - SEED_ONLY_IF_EMPTY=TRUE
+    depends_on:
+      postgres-registry:
+        condition: service_healthy
+    command: >
+      sh -c "apt-get update && apt-get install -y curl && npm run prisma:migrate && npm run prisma:seed && npm start"
+    networks:
+      - masumi-network-registry
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U masumi"]
-      interval: 5s
-      timeout: 3s
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
       retries: 5
 
   payment-service:
-    image: ghcr.io/masumi-network/masumi-payment-service:latest
-    env_file: .env.masumi
-    environment:
-      DATABASE_URL: postgresql://masumi:masumi_dev@postgres:5432/masumi_payment
+    image: ghcr.io/masumi-network/masumi-payment-service:0.22.0
+    container_name: masumi-payment-service
     ports:
       - "3001:3001"
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  registry-service:
-    image: ghcr.io/masumi-network/masumi-registry-service:latest
-    env_file: .env.masumi
     environment:
-      DATABASE_URL: postgresql://masumi:masumi_dev@postgres:5432/masumi_payment
-    ports:
-      - "3000:3000"
+      - DATABASE_URL=postgresql://postgres:postgres@postgres-payment:5432/postgres?schema=public
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - ADMIN_KEY=${ADMIN_KEY}
+      - BLOCKFROST_API_KEY_PREPROD=${BLOCKFROST_API_KEY_PREPROD}
+      - SEED_ONLY_IF_EMPTY=TRUE
     depends_on:
-      postgres:
+      postgres-payment:
         condition: service_healthy
+    command: >
+      sh -c "apt-get update && apt-get install -y curl && npm run prisma:migrate && npm run prisma:seed && npm start"
+    networks:
+      - masumi-network-payment
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-registry:
+    image: postgres:15
+    container_name: masumi-postgres-registry
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data_registry:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - masumi-network-registry
+    restart: unless-stopped
+
+  postgres-payment:
+    image: postgres:15
+    container_name: masumi-postgres-payment
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data_payment:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - masumi-network-payment
+    restart: unless-stopped
+
+networks:
+  masumi-network-registry:
+    driver: bridge
+  masumi-network-payment:
+    driver: bridge
 
 volumes:
-  masumi_pgdata:
+  postgres_data_registry:
+    name: masumi_postgres_data_registry
+    driver: local
+  postgres_data_payment:
+    name: masumi_postgres_data_payment
+    driver: local

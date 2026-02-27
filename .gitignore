@@ -11,6 +11,7 @@ dist/
 build/
 .eggs/
 .env
+.env.*
 *.log
 .pytest_cache/
 .mypy_cache/

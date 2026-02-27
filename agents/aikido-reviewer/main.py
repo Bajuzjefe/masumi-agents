@@ -9,7 +9,6 @@ import time
 import uuid
 from typing import List
 
-import cuid2
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -96,7 +95,7 @@ async def start_job(data: StartJobRequest):
         if not PAYMENT_SERVICE_URL or not PAYMENT_AUTH:
             raise HTTPException(status_code=500, detail="Payment service not configured.")
 
-        identifier_from_purchaser = cuid2.Cuid().generate()
+        identifier_from_purchaser = uuid.uuid4().hex[:24]  # 24-char hex string
         input_data_dict = {item.key: item.value for item in data.input_data}
 
         if "aikido_report" not in input_data_dict:
