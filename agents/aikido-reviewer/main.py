@@ -137,7 +137,6 @@ async def start_job(data: StartJobRequest):
                 detail=f"'source_files' must be a non-empty JSON object mapping file paths to source code: {e}",
             )
 
-        payment_amount = int(os.getenv("PAYMENT_AMOUNT", "5000000"))  # 5 ADA default
         config = Config(
             payment_service_url=PAYMENT_SERVICE_URL,
             payment_api_key=PAYMENT_AUTH,
