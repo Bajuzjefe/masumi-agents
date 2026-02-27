@@ -1,32 +1,13 @@
-"""Masumi MIP-003 compliant entry point for the Aikido Audit Reviewer agent."""
+"""Masumi MIP-003 compliant entry point for the Aikido Audit Reviewer agent.
 
-import json
+All review requests go through Masumi payment flow. No free/standalone access.
+"""
+
 import logging
 import os
-import sys
 import time
 import uuid
 from typing import List
-
-from agent import process_job, process_job_async
-
-# Standalone mode: skip heavy dependencies
-if len(sys.argv) > 1 and sys.argv[1] == "standalone":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
-    if len(sys.argv) > 2:
-        with open(sys.argv[2]) as f:
-            report_json = f.read()
-        depth = sys.argv[3] if len(sys.argv) > 3 else "quick"
-        result = process_job({
-            "aikido_report": report_json,
-            "source_files": "{}",
-            "review_depth": depth,
-        })
-        print(json.dumps(result, indent=2))
-    else:
-        print("Usage: python main.py standalone <aikido-report.json> [quick|standard|deep]")
-    sys.exit(0)
 
 import cuid2
 import uvicorn
@@ -35,6 +16,8 @@ from fastapi import FastAPI, HTTPException
 from masumi.config import Config
 from masumi.payment import Payment
 from pydantic import BaseModel
+
+from agent import process_job_async
 
 load_dotenv(override=True)
 
@@ -304,24 +287,28 @@ async def health():
     return {"status": "healthy"}
 
 
-# ---------------------------------------------------------------------------
-# Standalone mode (no payment, for testing)
-# ---------------------------------------------------------------------------
-
-@app.post("/standalone")
-async def standalone_review(data: StartJobRequest):
-    """Run a review without payment flow (for local testing)."""
-    input_data_dict = {item.key: item.value for item in data.input_data}
-
-    if "aikido_report" not in input_data_dict:
-        raise HTTPException(status_code=400, detail="'aikido_report' is required.")
-
-    result = await execute_agentic_task(input_data_dict)
-    return result
-
-
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8011"))
+
+    # Validate required config before starting
+    missing = []
+    if not PAYMENT_SERVICE_URL:
+        missing.append("PAYMENT_SERVICE_URL")
+    if not PAYMENT_AUTH:
+        missing.append("PAYMENT_API_KEY")
+    if not os.getenv("AGENT_IDENTIFIER", "").strip():
+        missing.append("AGENT_IDENTIFIER")
+    if not os.getenv("ANTHROPIC_API_KEY", ""):
+        missing.append("ANTHROPIC_API_KEY")
+
+    if missing:
+        logger.error(
+            "Missing required env vars: %s. "
+            "See .env.example and run scripts/register-agent.sh first.",
+            ", ".join(missing),
+        )
+        raise SystemExit(1)
+
     logger.info("Starting Aikido Audit Reviewer on %s:%d", host, port)
     uvicorn.run(app, host=host, port=port)

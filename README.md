@@ -8,47 +8,40 @@ Masumi-compatible AI agents for the Cardano ecosystem.
 
 AI-powered triage of [Aikido](https://github.com/Bajuzjefe/aikido) security analysis findings for Aiken smart contracts. Classifies each finding as true/false positive with detailed reasoning, mitigating patterns, and remediation priorities.
 
-**Review modes:**
-- **Quick** — Heuristic only, instant, zero API cost
-- **Standard** — LLM review for critical/high, batched for medium/low
-- **Deep** — Two-pass with cross-finding correlation
+**Review tiers:**
+- **Quick** (1 USDM) — Heuristic only, instant, zero API cost
+- **Standard** (5 USDM) — LLM review for critical/high, batched for medium/low
+- **Deep** (10 USDM) — Two-pass with cross-finding correlation
 
-## Quick Start
+## Setup
 
-### Standalone (no payment, local testing)
-
-```bash
-cd agents/aikido-reviewer
-pip install pydantic anthropic
-python main.py standalone path/to/aikido-report.json quick
-```
-
-### API Server (MIP-003, no payment)
+### 1. Start Masumi node
 
 ```bash
-cd agents/aikido-reviewer
-pip install -r requirements.txt
-cp .env.example .env  # add ANTHROPIC_API_KEY
-python main.py
-# POST to http://localhost:8011/standalone
-```
-
-### Full Masumi Setup (with payment)
-
-```bash
-# 1. Start Masumi node
 cp .env.masumi.example .env.masumi
 # Fill in BLOCKFROST_API_KEY_PREPROD and ADMIN_KEY
 docker compose up -d
+```
 
-# 2. Register agent (follow prompts)
+### 2. Register agent
+
+```bash
 ./scripts/register-agent.sh
+# Follow prompts — fund wallet, register via admin dashboard, note your identifiers
+```
 
-# 3. Start agent
+### 3. Configure and start
+
+```bash
 cd agents/aikido-reviewer
-cp .env.example .env  # fill in all values from registration
+cp .env.example .env
+# Fill in ALL values from registration:
+#   ANTHROPIC_API_KEY, PAYMENT_SERVICE_URL, PAYMENT_API_KEY,
+#   SELLER_VKEY, AGENT_IDENTIFIER, NETWORK
 python main.py
 ```
+
+The agent will validate all required config on startup and refuse to start if anything is missing.
 
 ### Kodosumi (scaling)
 
@@ -60,7 +53,16 @@ uvicorn agents.aikido_reviewer.kodosumi_app:app --port 8011
 serve deploy data/config/config.yaml
 ```
 
-## Testing
+## How It Works
+
+1. Buyer discovers the agent on [Sokosumi](https://preprod.sokosumi.com/agents) or calls `/start_job` directly
+2. Masumi creates a payment request — buyer pays in USDM on Cardano
+3. On payment confirmation, the agent runs the Aikido review
+4. Results are delivered via `/status` and settled on-chain
+
+## Testing (development only)
+
+Unit tests validate the pipeline without making LLM calls or requiring payment:
 
 ```bash
 cd agents/aikido-reviewer
@@ -73,7 +75,7 @@ python -m pytest tests/ -v
 ```
 masumi-agents/
 ├── agents/aikido-reviewer/
-│   ├── main.py              # MIP-003 FastAPI + standalone CLI
+│   ├── main.py              # MIP-003 FastAPI (payment-gated)
 │   ├── kodosumi_app.py      # Kodosumi runtime entry
 │   ├── agent.py             # Pipeline orchestrator
 │   ├── analyzer.py          # LLM + heuristic analysis
@@ -81,7 +83,7 @@ masumi-agents/
 │   ├── schemas.py           # Pydantic I/O models
 │   ├── source_extractor.py  # Code snippet extraction
 │   ├── report_builder.py    # Risk scoring + report assembly
-│   └── tests/               # 41 unit tests
+│   └── tests/               # 42 unit tests
 ├── data/config/             # Kodosumi deployment configs
 ├── docker-compose.yml       # Masumi node (Postgres + Payment + Registry)
 ├── scripts/                 # Setup and registration scripts
