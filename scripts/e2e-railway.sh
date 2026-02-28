@@ -12,6 +12,8 @@
 #   POLL_ATTEMPTS=5
 #   POLL_SLEEP_SECONDS=3
 #   SAMPLE_REPORT_PATH=agents/aikido-reviewer/tests/fixtures/sample_report.json
+#   KODOSUMI_CANARY=0|1
+#   KODOSUMI_CANARY_HEADER=x-kodosumi-canary
 #
 # Usage:
 #   AGENT_BASE_URL=... ./scripts/e2e-railway.sh
@@ -32,6 +34,8 @@ fi
 POLL_ATTEMPTS="${POLL_ATTEMPTS:-5}"
 POLL_SLEEP_SECONDS="${POLL_SLEEP_SECONDS:-3}"
 SAMPLE_REPORT_PATH="${SAMPLE_REPORT_PATH:-agents/aikido-reviewer/tests/fixtures/sample_report.json}"
+KODOSUMI_CANARY="${KODOSUMI_CANARY:-0}"
+KODOSUMI_CANARY_HEADER="${KODOSUMI_CANARY_HEADER:-x-kodosumi-canary}"
 
 AGENT_BASE_URL="${AGENT_BASE_URL%/}"
 
@@ -58,17 +62,29 @@ SOURCE_FILES_JSON='{"validators/main.ak":"validator main { spend(_datum, _redeem
 PAYLOAD="$(jq -n \
   --arg report "$REPORT_JSON" \
   --arg source "$SOURCE_FILES_JSON" \
+  --arg canary "$KODOSUMI_CANARY" \
   '{
     input_data: [
       {key: "aikido_report", value: $report},
       {key: "source_files", value: $source}
     ]
-  }')"
+  }
+  | if ($canary == "1") then
+      .input_data += [{key: "execution_backend", value: "kodosumi"}]
+    else . end
+  ')"
 
 echo "3) Calling /start_job"
-START_RESPONSE="$(curl -fsS -X POST "$AGENT_BASE_URL/start_job" \
-  -H "content-type: application/json" \
-  -d "$PAYLOAD")"
+if [[ "$KODOSUMI_CANARY" == "1" ]]; then
+  START_RESPONSE="$(curl -fsS -X POST "$AGENT_BASE_URL/start_job" \
+    -H "content-type: application/json" \
+    -H "$KODOSUMI_CANARY_HEADER: 1" \
+    -d "$PAYLOAD")"
+else
+  START_RESPONSE="$(curl -fsS -X POST "$AGENT_BASE_URL/start_job" \
+    -H "content-type: application/json" \
+    -d "$PAYLOAD")"
+fi
 echo "$START_RESPONSE" | jq '{job_id, payment_id, blockchainIdentifier, sellerVkey, network, agentIdentifier}'
 echo ""
 
@@ -81,7 +97,7 @@ fi
 echo "4) Polling /status for job_id=$JOB_ID"
 for i in $(seq 1 "$POLL_ATTEMPTS"); do
   STATUS="$(curl -fsS "$AGENT_BASE_URL/status?job_id=$JOB_ID")"
-  echo "  poll $i: $(echo "$STATUS" | jq -r '.status + " / payment=" + (.payment_status // "unknown")')"
+  echo "  poll $i: $(echo "$STATUS" | jq -r '.status + " / payment=" + (.payment_status // "unknown") + " / backend=" + (.execution_backend // "default") + " / fallback=" + ((.execution_meta.fallback_used // false)|tostring)')"
   sleep "$POLL_SLEEP_SECONDS"
 done
 

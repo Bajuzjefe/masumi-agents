@@ -3,6 +3,8 @@
 All review requests go through Masumi payment flow. No free/standalone access.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -10,15 +12,20 @@ import os
 import time
 import uuid
 from typing import Dict, List
-
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from masumi.config import Config
 from masumi.payment import Payment
 from pydantic import BaseModel
 
 from agent import process_job_async
+from execution_backend import (
+    header_value,
+    parse_bool,
+    resolve_execution_backend,
+    execute_via_worker,
+)
 from scan_runner import (
     contains_aiken_toml,
     run_aikido_scan_from_repo,
@@ -49,6 +56,35 @@ payment_instances: dict = {}
 server_start_time = time.time()
 
 
+def _kodosumi_enabled() -> bool:
+    return parse_bool(os.getenv("KODOSUMI_ENABLED", "false"), default=False)
+
+
+def _kodosumi_fallback_on_error() -> bool:
+    return parse_bool(os.getenv("KODOSUMI_FALLBACK_ON_ERROR", "true"), default=True)
+
+
+def _kodosumi_timeout_seconds() -> float:
+    raw = str(os.getenv("KODOSUMI_REQUEST_TIMEOUT_SECONDS", "90")).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 90.0
+    return value if value > 0 else 90.0
+
+
+def _kodosumi_canary_header_name() -> str:
+    return str(os.getenv("KODOSUMI_CANARY_HEADER_NAME", "x-kodosumi-canary")).strip().lower()
+
+
+def _new_execution_meta() -> dict:
+    return {
+        "worker_request_id": None,
+        "duration_ms": None,
+        "fallback_used": False,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Pydantic request models
 # ---------------------------------------------------------------------------
@@ -66,6 +102,7 @@ class StartJobRequest(BaseModel):
             "example": {
                 "input_data": [
                     {"key": "scan_mode", "value": "manual"},
+                    {"key": "execution_backend", "value": "default"},
                     {"key": "repo_url", "value": "https://github.com/org/repo"},
                     {"key": "aikido_report", "value": "{...}"},
                     {"key": "source_files", "value": "{...}"},
@@ -108,7 +145,7 @@ def _get_source_files_if_provided(input_data: Dict[str, str]) -> Dict[str, str] 
 # ---------------------------------------------------------------------------
 
 @app.post("/start_job")
-async def start_job(data: StartJobRequest):
+async def start_job(data: StartJobRequest, request: Request):
     """Initiate a review job and create a payment request."""
     try:
         job_id = str(uuid.uuid4())
@@ -126,6 +163,18 @@ async def start_job(data: StartJobRequest):
         input_data_dict["review_depth"] = "deep"
         if requested_depth and requested_depth != "deep":
             logger.info("Ignoring requested review_depth=%s; deep mode is enforced", requested_depth)
+
+        requested_backend = input_data_dict.get("execution_backend")
+        canary_header = header_value(request.headers, _kodosumi_canary_header_name())
+        try:
+            execution_backend = resolve_execution_backend(
+                requested_backend=requested_backend,
+                canary_header_value=canary_header,
+                kodosumi_enabled=_kodosumi_enabled(),
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        input_data_dict["execution_backend"] = execution_backend
 
         scan_mode = str(input_data_dict.get("scan_mode", "manual")).strip().lower()
         input_data_dict["scan_mode"] = scan_mode
@@ -241,6 +290,8 @@ async def start_job(data: StartJobRequest):
             "input_data": input_data_dict,
             "result": None,
             "identifier_from_purchaser": identifier_from_purchaser,
+            "execution_backend": execution_backend,
+            "execution_meta": _new_execution_meta(),
         }
 
         async def payment_callback(pid: str):
@@ -264,12 +315,66 @@ async def start_job(data: StartJobRequest):
             "externalDisputeUnlockTime": str(payment_request["data"]["externalDisputeUnlockTime"]),
             "agentIdentifier": agent_identifier,
             "inputHash": payment_request["data"]["inputHash"],
+            "executionBackend": execution_backend,
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.error("Error in start_job: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error.")
+
+
+async def _execute_with_selected_backend(job_id: str, payment_id: str, input_data: dict) -> dict:
+    """Execute analysis using selected backend with optional fallback."""
+    selected_backend = jobs[job_id].get("execution_backend", "default")
+    execution_meta = jobs[job_id].setdefault("execution_meta", _new_execution_meta())
+    started_at = time.perf_counter()
+
+    if selected_backend == "kodosumi":
+        try:
+            logger.info(
+                "Dispatching to kodosumi worker for job_id=%s payment_id=%s",
+                job_id,
+                payment_id,
+            )
+            result, worker_request_id = await execute_via_worker(
+                internal_url=os.getenv("KODOSUMI_INTERNAL_URL", ""),
+                token=os.getenv("KODOSUMI_INTERNAL_TOKEN", ""),
+                timeout_seconds=_kodosumi_timeout_seconds(),
+                input_data=input_data,
+                job_id=job_id,
+                payment_id=payment_id,
+                attempts=2,
+            )
+            execution_meta["worker_request_id"] = worker_request_id
+        except Exception as worker_error:  # noqa: BLE001 - handled by fallback/raise
+            logger.error(
+                "Kodosumi worker execution failed for job_id=%s payment_id=%s: %s",
+                job_id,
+                payment_id,
+                worker_error,
+                exc_info=True,
+            )
+            if not _kodosumi_fallback_on_error():
+                raise
+
+            execution_meta["fallback_used"] = True
+            logger.warning(
+                "Falling back to default execution backend for job_id=%s payment_id=%s",
+                job_id,
+                payment_id,
+            )
+            result = await execute_agentic_task(input_data)
+    else:
+        logger.info(
+            "Executing default backend for job_id=%s payment_id=%s",
+            job_id,
+            payment_id,
+        )
+        result = await execute_agentic_task(input_data)
+
+    execution_meta["duration_ms"] = int((time.perf_counter() - started_at) * 1000)
+    return result
 
 
 async def handle_payment_status(job_id: str, payment_id: str) -> None:
@@ -312,8 +417,7 @@ async def handle_payment_status(job_id: str, payment_id: str) -> None:
             }
 
         jobs[job_id]["status"] = "running"
-
-        result = await execute_agentic_task(input_data)
+        result = await _execute_with_selected_backend(job_id, payment_id, input_data)
 
         await payment_instances[job_id].complete_payment(payment_id, result)
 
@@ -361,6 +465,8 @@ async def get_status(job_id: str):
         "payment_status": job["payment_status"],
         "result": job.get("result"),
         "scan_summary": job.get("scan_summary"),
+        "execution_backend": job.get("execution_backend", "default"),
+        "execution_meta": job.get("execution_meta", _new_execution_meta()),
         "error": job.get("error"),
     }
 
@@ -413,6 +519,20 @@ async def input_schema():
                         "If provided and aikido_report is omitted, the agent clones and scans this repo."
                     ),
                     "placeholder": "https://github.com/org/repo",
+                },
+            },
+            {
+                "id": "execution_backend",
+                "type": "string",
+                "name": "Execution Backend",
+                "required": False,
+                "data": {
+                    "description": (
+                        "Optional canary override. Use 'default' for local in-process execution "
+                        "or 'kodosumi' to route post-payment analysis through Kodosumi worker. "
+                        "If omitted, backend selection uses canary header and environment settings."
+                    ),
+                    "placeholder": "default",
                 },
             },
             {
@@ -506,6 +626,15 @@ if __name__ == "__main__":
             ", ".join(missing),
         )
         raise SystemExit(1)
+
+    if _kodosumi_enabled():
+        worker_url = str(os.getenv("KODOSUMI_INTERNAL_URL", "")).strip()
+        worker_token = str(os.getenv("KODOSUMI_INTERNAL_TOKEN", "")).strip()
+        if not worker_url or not worker_token:
+            logger.warning(
+                "KODOSUMI_ENABLED=true but worker URL/token are missing. "
+                "Canary jobs will fail unless fallback is enabled."
+            )
 
     logger.info("Starting Aikido Audit Reviewer on %s:%d", host, port)
     uvicorn.run(app, host=host, port=port)

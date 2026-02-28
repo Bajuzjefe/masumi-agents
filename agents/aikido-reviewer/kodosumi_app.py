@@ -1,101 +1,133 @@
-"""Kodosumi runtime entry point for the Aikido Audit Reviewer.
+"""Kodosumi + machine endpoint runtime for Aikido Audit Reviewer."""
 
-Provides ServeAPI with input forms, Ray-based parallelization,
-and real-time Tracer events for progress monitoring.
-"""
+from __future__ import annotations
 
 import json
 import logging
 import os
+import time
 from typing import Any, Dict
 
-from kodosumi import forms as F
-from kodosumi.serve import ServeAPI, Launch
+import uvicorn
+from fastapi import FastAPI, Header, HTTPException, Request
+from pydantic import BaseModel
 
 from agent import process_job_async
 
 logger = logging.getLogger(__name__)
 
-app = ServeAPI()
-
-# ---------------------------------------------------------------------------
-# Input form definition
-# ---------------------------------------------------------------------------
-
-input_form = F.Model([
-    F.Markdown("# Aikido Audit Reviewer"),
-    F.Markdown(
-        "Upload your Aikido scan output and source code to receive "
-        "an AI-powered triage report classifying each finding as "
-        "true/false positive with detailed reasoning."
-    ),
-    F.Break(),
-    F.InputArea(
-        label="Aikido JSON Report",
-        name="aikido_report",
-    ),
-    F.InputArea(
-        label="Source Code Files (JSON dict)",
-        name="source_files",
-    ),
-    F.Submit(),
-    F.Cancel(),
-])
+try:
+    from kodosumi import forms as F
+    from kodosumi.serve import ServeAPI
+except ImportError:  # pragma: no cover - optional path for non-worker runtimes
+    F = None
+    ServeAPI = None
 
 
-# ---------------------------------------------------------------------------
-# Entrypoint
-# ---------------------------------------------------------------------------
+class ExecuteRequest(BaseModel):
+    input_data: Dict[str, Any]
+    job_id: str | None = None
+    payment_id: str | None = None
 
-@app.enter(form=input_form)
-async def review_handler(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Kodosumi entrypoint — receives form data, runs review pipeline."""
-    aikido_report = payload.get("aikido_report", "")
-    source_files = payload.get("source_files", "{}")
-    review_depth = "deep"
 
-    if not aikido_report:
-        return {"error": "aikido_report is required"}
+def _validate_worker_token(authorization: str | None) -> None:
+    token = str(os.getenv("KODOSUMI_INTERNAL_TOKEN", "")).strip()
+    if not token:
+        raise HTTPException(status_code=500, detail="KODOSUMI_INTERNAL_TOKEN not configured")
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    presented = authorization.split(" ", 1)[1].strip()
+    if presented != token:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # Validate JSON
-    try:
-        report_data = json.loads(aikido_report) if isinstance(aikido_report, str) else aikido_report
-        total = report_data.get("total", 0)
-    except (json.JSONDecodeError, AttributeError):
-        return {"error": "Invalid JSON in aikido_report"}
 
+async def run_review_payload(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Shared worker runner used by Kodosumi and machine endpoint."""
+    return await process_job_async(input_data)
+
+
+machine_app = FastAPI(
+    title="Aikido Kodosumi Worker",
+    description="Internal execution worker used by API canary routing.",
+    version="1.0.0",
+)
+
+
+@machine_app.get("/health")
+async def machine_health() -> dict:
+    return {"status": "healthy", "service": "aikido-reviewer-kodosumi-worker"}
+
+
+@machine_app.post("/internal/execute")
+async def internal_execute(
+    payload: ExecuteRequest,
+    request: Request,
+    authorization: str | None = Header(default=None),
+) -> Dict[str, Any]:
+    _validate_worker_token(authorization)
+    worker_request_id = request.headers.get("x-worker-request-id", "n/a")
+    started_at = time.perf_counter()
+    result = await run_review_payload(payload.input_data)
+    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
     logger.info(
-        "Starting review: %d findings, depth=%s",
-        total,
-        review_depth,
+        "Worker execution completed: job_id=%s payment_id=%s worker_request_id=%s duration_ms=%s",
+        payload.job_id,
+        payload.payment_id,
+        worker_request_id,
+        elapsed_ms,
     )
-
-    # Run the review pipeline (async-safe, no asyncio.run() nesting)
-    result = await process_job_async({
-        "aikido_report": aikido_report,
-        "source_files": source_files,
-        "review_depth": review_depth,
-    })
-
     return result
 
 
-# ---------------------------------------------------------------------------
-# Ray Serve deployment (optional, for production scaling)
-# ---------------------------------------------------------------------------
+if ServeAPI is not None and F is not None:
+    app = ServeAPI()
+    input_form = F.Model([
+        F.Markdown("# Aikido Audit Reviewer"),
+        F.Markdown(
+            "Upload your Aikido scan output and source code to receive "
+            "an AI-powered triage report classifying each finding as "
+            "true/false positive with detailed reasoning."
+        ),
+        F.Break(),
+        F.InputArea(
+            label="Aikido JSON Report",
+            name="aikido_report",
+        ),
+        F.InputArea(
+            label="Source Code Files (JSON dict)",
+            name="source_files",
+        ),
+        F.Submit(),
+        F.Cancel(),
+    ])
 
-try:
-    from ray import serve
+    @app.enter(form=input_form)
+    async def review_handler(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Kodosumi form entrypoint."""
+        aikido_report = payload.get("aikido_report", "")
+        source_files = payload.get("source_files", "{}")
+        review_depth = "deep"
 
-    @serve.deployment(
-        num_replicas=1,
-        ray_actor_options={"num_cpus": 1},
-    )
-    @serve.ingress(app)
-    class AikidoReviewerDeployment:
-        """Ray Serve deployment wrapper."""
-        pass
+        if not aikido_report:
+            return {"error": "aikido_report is required"}
 
-except ImportError:
-    # Ray not installed — app still works standalone via uvicorn
-    pass
+        try:
+            report_data = json.loads(aikido_report) if isinstance(aikido_report, str) else aikido_report
+            total = report_data.get("total", 0)
+        except (json.JSONDecodeError, AttributeError):
+            return {"error": "Invalid JSON in aikido_report"}
+
+        logger.info("Kodosumi form review start: findings=%d depth=%s", total, review_depth)
+        return await run_review_payload({
+            "aikido_report": aikido_report,
+            "source_files": source_files,
+            "review_depth": review_depth,
+        })
+else:
+    app = None
+
+
+if __name__ == "__main__":
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8021"))
+    uvicorn.run(machine_app, host=host, port=port)

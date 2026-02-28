@@ -1,9 +1,9 @@
-# Kodosumi service configuration for Aikido Audit Reviewer
-name: aikido-reviewer
-route_prefix: /aikido-reviewer
-import_path: agents.aikido_reviewer.kodosumi_app:app
+# Kodosumi service configuration for Aikido worker runtime
+name: aikido-reviewer-worker
+route_prefix: /
+import_path: worker_main:app
 runtime_env:
-  working_dir: .
+  working_dir: ./agents/aikido-reviewer
   pip:
     - fastapi>=0.104.0
     - uvicorn[standard]>=0.24.0
@@ -12,3 +12,4 @@ runtime_env:
     - anthropic
     - httpx
     - kodosumi
+    - ray[serve]>=2.48.0
