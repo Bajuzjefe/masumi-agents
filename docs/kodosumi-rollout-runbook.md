@@ -41,12 +41,16 @@ Worker service:
 
 ## Koco onboarding
 
-1. Validate local tooling:
-   - `./scripts/koco-bootstrap.sh check`
-2. Deploy:
-   - `./scripts/koco-bootstrap.sh deploy`
-3. Start runtime if required:
-   - `./scripts/koco-bootstrap.sh start`
+Railway-first onboarding (no local runtime required):
+
+1. Ensure the public Kodosumi UI service is healthy:
+   - `GET https://aikido-reviewer-kodosumi-ui-production.up.railway.app/health`
+2. Register the agent in Koco using OpenAPI from:
+   - `https://aikido-reviewer-kodosumi-ui-production.up.railway.app/openapi.json`
+3. Confirm Koco can fetch form schema from:
+   - `GET https://aikido-reviewer-kodosumi-ui-production.up.railway.app/`
+4. Keep API canary disabled until registration and schema sync are verified:
+   - `KODOSUMI_ENABLED=false`
 
 ## Monitoring checks
 

@@ -8,6 +8,18 @@ RUN apt-get update \
 
 COPY requirements-worker.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
+RUN python - <<'PY'
+from pathlib import Path
+
+path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/service/inputs/forms.py")
+if path.exists():
+    text = path.read_text(encoding="utf-8")
+    old = '{"\\n".join(self.error if self.error else [])}'
+    new = '{chr(10).join(self.error if self.error else [])}'
+    if old in text:
+        path.write_text(text.replace(old, new), encoding="utf-8")
+        print("patched kodosumi forms.py syntax issue")
+PY
 
 COPY . .
 

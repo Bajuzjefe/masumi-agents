@@ -16,12 +16,51 @@ from agent import process_job_async
 
 logger = logging.getLogger(__name__)
 
-try:
-    from kodosumi import forms as F
-    from kodosumi.serve import ServeAPI
-except ImportError:  # pragma: no cover - optional path for non-worker runtimes
-    F = None
-    ServeAPI = None
+IMPORT_ERROR_DETAIL = None
+F = None
+ServeAPI = None
+Launch = None
+InputsError = None
+
+_form_import_errors: list[str] = []
+for form_import in (
+    "from kodosumi.service.inputs import forms as F",
+    "from kodosumi import forms as F",
+):
+    try:
+        exec(form_import, globals())
+        break
+    except Exception as exc:  # pragma: no cover - import compatibility path
+        _form_import_errors.append(repr(exc))
+
+_serve_import_errors: list[str] = []
+for serve_import in (
+    "from kodosumi.serve import ServeAPI",
+    "from kodosumi.core import ServeAPI",
+):
+    try:
+        exec(serve_import, globals())
+        break
+    except Exception as exc:  # pragma: no cover - import compatibility path
+        _serve_import_errors.append(repr(exc))
+
+_core_import_errors: list[str] = []
+for core_import in (
+    "from kodosumi.core import Launch, InputsError",
+    "from kodosumi import Launch, InputsError",
+):
+    try:
+        exec(core_import, globals())
+        break
+    except Exception as exc:  # pragma: no cover - import compatibility path
+        _core_import_errors.append(repr(exc))
+
+if F is None or ServeAPI is None or Launch is None or InputsError is None:
+    IMPORT_ERROR_DETAIL = (
+        f"forms={'; '.join(_form_import_errors)}; "
+        f"serve={'; '.join(_serve_import_errors)}; "
+        f"core={'; '.join(_core_import_errors)}"
+    )
 
 
 class ExecuteRequest(BaseModel):
@@ -44,6 +83,17 @@ def _validate_worker_token(authorization: str | None) -> None:
 async def run_review_payload(input_data: Dict[str, Any]) -> Dict[str, Any]:
     """Shared worker runner used by Kodosumi and machine endpoint."""
     return await process_job_async(input_data)
+
+
+async def run_review_flow(inputs: Dict[str, Any], tracer: Any = None) -> Dict[str, Any]:
+    """Kodosumi launched runner for executing review jobs."""
+    if tracer is not None and hasattr(tracer, "markdown"):
+        await tracer.markdown("### Running Aikido deep review")
+    return await run_review_payload({
+        "aikido_report": inputs.get("aikido_report", ""),
+        "source_files": inputs.get("source_files", "{}"),
+        "review_depth": "deep",
+    })
 
 
 machine_app = FastAPI(
@@ -79,9 +129,9 @@ async def internal_execute(
     return result
 
 
-if ServeAPI is not None and F is not None:
+if ServeAPI is not None and F is not None and Launch is not None and InputsError is not None:
     app = ServeAPI()
-    input_form = F.Model([
+    input_elements = [
         F.Markdown("# Aikido Audit Reviewer"),
         F.Markdown(
             "Upload your Aikido scan output and source code to receive "
@@ -97,34 +147,65 @@ if ServeAPI is not None and F is not None:
             label="Source Code Files (JSON dict)",
             name="source_files",
         ),
-        F.Submit(),
-        F.Cancel(),
-    ])
+        F.Submit("Run Analysis"),
+        F.Cancel("Cancel"),
+    ]
 
-    @app.enter(form=input_form)
-    async def review_handler(payload: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        input_form = F.Model(*input_elements)
+    except TypeError:
+        input_form = F.Model(input_elements)
+
+    # Kodosumi API compatibility: some builds wrap children in an extra list.
+    # Flatten once so get_model() always sees element objects with to_dict().
+    if hasattr(input_form, "children"):
+        normalized_children = []
+        for child in getattr(input_form, "children"):
+            if isinstance(child, list):
+                normalized_children.extend(child)
+            else:
+                normalized_children.append(child)
+        input_form.children = normalized_children
+
+    @app.enter(
+        path="/",
+        model=input_form,
+        summary="Aikido Audit Review",
+        description="Run deep smart contract review from provided report and source files.",
+        tags=["Aikido", "Security"],
+        version="1.0.0",
+        author="support@sokosumi.com",
+    )
+    async def review_handler(request: Request, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Kodosumi form entrypoint."""
-        aikido_report = payload.get("aikido_report", "")
-        source_files = payload.get("source_files", "{}")
+        _ = request
+        aikido_report = inputs.get("aikido_report", "")
+        source_files = inputs.get("source_files", "{}")
         review_depth = "deep"
 
         if not aikido_report:
-            return {"error": "aikido_report is required"}
+            raise InputsError(aikido_report="aikido_report is required")
 
         try:
             report_data = json.loads(aikido_report) if isinstance(aikido_report, str) else aikido_report
             total = report_data.get("total", 0)
         except (json.JSONDecodeError, AttributeError):
-            return {"error": "Invalid JSON in aikido_report"}
+            raise InputsError(aikido_report="Invalid JSON in aikido_report")
 
         logger.info("Kodosumi form review start: findings=%d depth=%s", total, review_depth)
-        return await run_review_payload({
-            "aikido_report": aikido_report,
-            "source_files": source_files,
-            "review_depth": review_depth,
-        })
+        return Launch(
+            request,
+            "kodosumi_app:run_review_flow",
+            inputs={
+                "aikido_report": aikido_report,
+                "source_files": source_files,
+                "review_depth": review_depth,
+            },
+        )
 else:
     app = None
+    if IMPORT_ERROR_DETAIL:
+        logger.warning("Kodosumi import failed: %s", IMPORT_ERROR_DETAIL)
 
 
 if __name__ == "__main__":

@@ -7,5 +7,5 @@ anthropic
 httpx
 
 # Worker runtime
-kodosumi
+kodosumi==1.0.0
 ray[serve]>=2.48.0
