@@ -257,6 +257,85 @@ def _patch_health_actor_debug() -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _patch_store_cross_user_lookup() -> None:
+    """Fallback status lookup across all execution user folders."""
+    path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/service/store.py")
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    if "cross-user fallback for Railway runtime" in text:
+        return
+    target = (
+        "        if helper.now() > t0 + waitfor:\n"
+        "            raise NotFoundException(\n"
+        "                f\"Execution {fid} not found after {waitfor}s.\")"
+    )
+    replacement = (
+        "        if helper.now() > t0 + waitfor:\n"
+        "            # cross-user fallback for Railway runtime\n"
+        "            exec_root = Path(state[\"settings\"].EXEC_DIR)\n"
+        "            found = None\n"
+        "            if exec_root.exists():\n"
+        "                for user_dir in exec_root.iterdir():\n"
+        "                    if not user_dir.is_dir():\n"
+        "                        continue\n"
+        "                    for candidate in (\n"
+        "                        user_dir.joinpath(fid, DB_FILE),\n"
+        "                        user_dir.joinpath(fid, DB_FILE + '.archive'),\n"
+        "                    ):\n"
+        "                        if candidate.exists():\n"
+        "                            found = candidate\n"
+        "                            break\n"
+        "                    if found is not None:\n"
+        "                        break\n"
+        "            if found is None:\n"
+        "                raise NotFoundException(\n"
+        "                    f\"Execution {fid} not found after {waitfor}s.\")\n"
+        "            db_file = found\n"
+        "            break"
+    )
+    if target in text:
+        text = text.replace(target, replacement)
+        path.write_text(text, encoding="utf-8")
+
+
+def _patch_timeline_cross_user_fallback() -> None:
+    """Fallback timeline scope to first non-empty execution user folder."""
+    path = Path(
+        "/usr/local/lib/python3.11/site-packages/kodosumi/service/inputs/timeline/controller.py"
+    )
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    if "_resolve_exec_dir" in text:
+        return
+    helper = (
+        "\n\ndef _resolve_exec_dir(state: State, request: Request) -> Path:\n"
+        "    exec_root = Path(state[\"settings\"].EXEC_DIR)\n"
+        "    preferred = exec_root.joinpath(request.user)\n"
+        "    try:\n"
+        "        if preferred.exists() and any(preferred.iterdir()):\n"
+        "            return preferred\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    if exec_root.exists():\n"
+        "        for user_dir in sorted(exec_root.iterdir(), key=lambda d: d.name):\n"
+        "            if user_dir.is_dir():\n"
+        "                try:\n"
+        "                    if any(user_dir.iterdir()):\n"
+        "                        return user_dir\n"
+        "                except Exception:\n"
+        "                    continue\n"
+        "    return preferred\n"
+    )
+    text = text.replace("class TimelineController(litestar.Controller):", helper + "\n\nclass TimelineController(litestar.Controller):")
+    text = text.replace(
+        "        exec_dir = Path(state[\"settings\"].EXEC_DIR).joinpath(request.user)",
+        "        exec_dir = _resolve_exec_dir(state, request)",
+    )
+    path.write_text(text, encoding="utf-8")
+
+
 def _patch_spooler_actor_discovery() -> None:
     """Ray compatibility fix: discover Runner actors without requiring Ray state API."""
     path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/spooler.py")
@@ -397,6 +476,10 @@ def main() -> int:
         _patch_serve_user_header_alias()
     if _is_true("KODO_PATCH_HEALTH_ACTORS", "true"):
         _patch_health_actor_debug()
+    if _is_true("KODO_PATCH_STORE_CROSS_USER", "true"):
+        _patch_store_cross_user_lookup()
+    if _is_true("KODO_PATCH_TIMELINE_CROSS_USER", "true"):
+        _patch_timeline_cross_user_fallback()
     if _is_true("KODO_PATCH_SPOOLER_DISCOVERY", "true"):
         _patch_spooler_actor_discovery()
     _reset_admin_db_if_requested()
