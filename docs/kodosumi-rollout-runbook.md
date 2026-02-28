@@ -7,8 +7,8 @@ Scope: `aikido-reviewer` hybrid deployment on Railway
 
 - API service: `aikido-reviewer-api` (public MIP-003 endpoints)
 - Worker service: `aikido-reviewer-kodosumi-worker` (private `/internal/execute`)
-- OpenAPI form service: `aikido-reviewer-kodosumi-ui` (public `openapi.json`)
-- Kodosumi control plane: `aikido-reviewer-kodosumi-panel` (admin frontend + API)
+- Kodosumi control plane: `aikido-reviewer-kodosumi-panel` (admin frontend + API + colocated form runtime)
+- Optional standalone form service: `aikido-reviewer-kodosumi-ui` (public `openapi.json` for direct testing)
 
 ## Required secrets and vars
 
@@ -27,11 +27,17 @@ Worker service:
 
 Panel service:
 
-- `REGISTER_ENDPOINT` (`https://<kodosumi-ui>/openapi.json`)
+- `ANTHROPIC_API_KEY`
 - `KODO_ADMIN_EMAIL`
 - `KODO_ADMIN_PASSWORD`
 - `KODO_SECRET_KEY`
 - `KODO_RESET_ADMIN_DB` (`true` once, then `false`)
+- `KODO_LOCAL_UI_ENABLED=true` (recommended)
+- `KODO_LOCAL_UI_PORT` (default `8031`)
+- `KODO_LOCAL_UI_HOST` (default `127.0.0.1`)
+- `KODO_LOCAL_UI_HEALTH_TIMEOUT_SECONDS` (default `45`)
+- `REGISTER_ENDPOINT` (optional external OpenAPI URL)
+- `KODO_LOCAL_UI_INCLUDE_EXTERNAL_REGISTERS` (default `false`)
 - `KODO_PATCH_HEALTH_AUTH` (`true`, recommended on Railway)
 - `KODO_PATCH_HTTPS_PROXY` (`true`, recommended on Railway)
 - `KODO_PATCH_PROXY_HOST` (`true`, recommended on Railway)
@@ -58,24 +64,21 @@ Panel service:
 
 Railway-first onboarding (no local runtime required):
 
-1. Ensure the public Kodosumi UI service is healthy:
-   - `GET https://aikido-reviewer-kodosumi-ui-production.up.railway.app/health`
-2. Ensure the panel service is healthy and reachable:
+1. Ensure the panel service is healthy and reachable:
    - `GET https://aikido-reviewer-kodosumi-panel-production.up.railway.app/health`
-3. Open panel frontend in browser and login:
+2. Open panel frontend in browser and login:
    - `https://aikido-reviewer-kodosumi-panel-production.up.railway.app/`
    - sign in as user `admin` with the credential configured via `KODO_ADMIN_PASSWORD`
-4. Verify admin screens:
+3. Verify admin screens:
    - `/admin/flow`
    - `/admin/routes`
    - `/admin/timeline/view`
    - `/admin/dashboard`
-5. Register the agent in panel/Koco using OpenAPI from:
-   - `https://aikido-reviewer-kodosumi-ui-production.up.railway.app/openapi.json`
-6. Confirm Koco can fetch form schema from:
-   - `GET https://aikido-reviewer-kodosumi-ui-production.up.railway.app/`
-7. Keep API canary disabled until registration and schema sync are verified:
+4. On `/admin/routes`, confirm a register source exists for `http://127.0.0.1:8031/openapi.json`.
+5. Keep API canary disabled until registration and schema sync are verified:
    - `KODOSUMI_ENABLED=false`
+
+If you intentionally use external OpenAPI registration (`REGISTER_ENDPOINT`), keep it for discovery/testing only unless execution storage is shared. Otherwise `/outputs/status/{fid}` can fail with `Execution ... not found` due to split execution filesystems across Railway services.
 
 ## Monitoring checks
 

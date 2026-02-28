@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import List
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
 
 def _split_registers(raw: str) -> List[str]:
@@ -21,6 +28,57 @@ def _split_registers(raw: str) -> List[str]:
 def _run(cmd: List[str], check: bool = True) -> int:
     proc = subprocess.run(cmd, check=check)
     return proc.returncode
+
+
+def _is_true(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes"}
+
+
+def _wait_http_ok(url: str, timeout_seconds: float = 30.0) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2.0) as response:
+                if 200 <= int(response.status) < 300:
+                    return True
+        except (urllib.error.URLError, TimeoutError):
+            time.sleep(0.5)
+    return False
+
+
+def _dedupe_keep_order(values: List[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for item in values:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _start_local_ui() -> tuple[subprocess.Popen[bytes] | None, str | None]:
+    if not _is_true("KODO_LOCAL_UI_ENABLED", "true"):
+        return None, None
+    local_ui_host = os.getenv("KODO_LOCAL_UI_HOST", "127.0.0.1")
+    local_ui_port = os.getenv("KODO_LOCAL_UI_PORT", "8031")
+    env = os.environ.copy()
+    env["HOST"] = local_ui_host
+    env["PORT"] = local_ui_port
+    cmd = [sys.executable, "ui_main.py"]
+    logger.info("Starting colocated Kodosumi UI: %s", " ".join(cmd))
+    process = subprocess.Popen(cmd, env=env)
+    health_url = f"http://{local_ui_host}:{local_ui_port}/health"
+    if not _wait_http_ok(
+        health_url,
+        timeout_seconds=float(os.getenv("KODO_LOCAL_UI_HEALTH_TIMEOUT_SECONDS", "45")),
+    ):
+        process.terminate()
+        process.wait(timeout=10)
+        raise RuntimeError(f"Local Kodosumi UI failed health check at {health_url}")
+    logger.info("Colocated Kodosumi UI healthy at %s", health_url)
+    register_url = f"http://{local_ui_host}:{local_ui_port}/openapi.json"
+    return process, register_url
 
 
 def _patch_inputs_force_https_panel_proxy() -> None:
@@ -149,11 +207,11 @@ def main() -> int:
     os.environ.setdefault("KODO_UVICORN_LEVEL", "INFO")
     os.environ["KODO_APP_SERVER"] = app_server
 
-    if os.getenv("KODO_PATCH_HEALTH_AUTH", "true").strip().lower() in {"1", "true", "yes"}:
+    if _is_true("KODO_PATCH_HEALTH_AUTH", "true"):
         _patch_health_auth()
-    if os.getenv("KODO_PATCH_HTTPS_PROXY", "true").strip().lower() in {"1", "true", "yes"}:
+    if _is_true("KODO_PATCH_HTTPS_PROXY", "true"):
         _patch_inputs_force_https_panel_proxy()
-    if os.getenv("KODO_PATCH_PROXY_HOST", "true").strip().lower() in {"1", "true", "yes"}:
+    if _is_true("KODO_PATCH_PROXY_HOST", "true"):
         _patch_proxy_host_forwarding()
     _reset_admin_db_if_requested()
 
@@ -173,13 +231,36 @@ def main() -> int:
     ]
     _run(ray_cmd, check=True)
 
+    local_ui_process: subprocess.Popen[bytes] | None = None
+    local_register: str | None = None
     start_cmd = ["koco", "start", "--address", app_server]
+    try:
+        local_ui_process, local_register = _start_local_ui()
+    except Exception:
+        _run(["ray", "stop", "--force"], check=False)
+        raise
+
+    if local_register:
+        if _is_true("KODO_LOCAL_UI_INCLUDE_EXTERNAL_REGISTERS", "false"):
+            registers = _dedupe_keep_order([local_register, *registers])
+        else:
+            registers = [local_register]
+    else:
+        registers = _dedupe_keep_order(registers)
+
     for endpoint in registers:
         start_cmd.extend(["--register", endpoint])
+    logger.info("Starting Kodosumi panel with registers=%s", registers)
 
     try:
         return subprocess.call(start_cmd)
     finally:
+        if local_ui_process is not None:
+            local_ui_process.terminate()
+            try:
+                local_ui_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                local_ui_process.kill()
         _run(["ray", "stop", "--force"], check=False)
 
 

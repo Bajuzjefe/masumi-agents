@@ -18,12 +18,14 @@ AI-powered triage of [Aikido](https://github.com/Bajuzjefe/aikido) security anal
 `railway.toml` is configured for API service deployment (`agents/aikido-reviewer/Dockerfile`).
 `railway.worker.toml` is provided for the Kodosumi worker service (`agents/aikido-reviewer/Dockerfile.kodosumi-worker`).
 
-Create four Railway services in the same project:
+Create these Railway services in the same project:
 
 1. `aikido-reviewer-api` (public MIP-003 API)
 2. `aikido-reviewer-kodosumi-worker` (internal execution worker)
-3. `aikido-reviewer-kodosumi-ui` (public agent OpenAPI/form endpoint)
-4. `aikido-reviewer-kodosumi-panel` (Kodosumi admin web panel/control plane)
+3. `aikido-reviewer-kodosumi-panel` (Kodosumi admin web panel/control plane + colocated form runtime)
+
+Optional:
+4. `aikido-reviewer-kodosumi-ui` (standalone public OpenAPI/form endpoint for direct testing only)
 
 Set these Railway variables on the API service:
 
@@ -47,7 +49,7 @@ Set these Railway variables on the worker service:
 - `HOST=0.0.0.0`
 - `PORT=8021`
 
-Set these Railway variables on the Kodosumi UI service:
+Set these Railway variables on the optional standalone Kodosumi UI service:
 
 - `ANTHROPIC_API_KEY`
 - `HOST=0.0.0.0`
@@ -59,12 +61,18 @@ Set these Railway variables on the Kodosumi UI service:
 
 Set these Railway variables on the Kodosumi panel service:
 
-- `REGISTER_ENDPOINT=https://<kodosumi-ui-service>.up.railway.app/openapi.json`
+- `ANTHROPIC_API_KEY`
 - `KODO_ADMIN_EMAIL` (admin account contact email, e.g. `admin@example.com`)
 - `KODO_ADMIN_PASSWORD` (password for panel login user `admin`)
 - `KODO_SECRET_KEY` (JWT signing secret for panel auth)
 - `HOST=0.0.0.0`
 - `PORT=8080`
+- `KODO_LOCAL_UI_ENABLED=true` (recommended; starts colocated UI in same service so launch/status/timeline share state)
+- optional: `KODO_LOCAL_UI_PORT=8031`
+- optional: `KODO_LOCAL_UI_HOST=127.0.0.1`
+- optional: `KODO_LOCAL_UI_HEALTH_TIMEOUT_SECONDS=45`
+- optional: `REGISTER_ENDPOINT=https://<external-openapi>/openapi.json` (used only when `KODO_LOCAL_UI_ENABLED=false`, or when explicitly included)
+- optional: `KODO_LOCAL_UI_INCLUDE_EXTERNAL_REGISTERS=false` (set `true` only if you intentionally want both local + external registers)
 - optional one-time reset: `KODO_RESET_ADMIN_DB=true` (set back to `false` after first successful login)
 - optional: `KODO_PATCH_HEALTH_AUTH=true` (recommended on Railway; keeps `/health` publicly checkable for platform probes)
 - optional: `KODO_PATCH_HTTPS_PROXY=true` (recommended on Railway; prevents panel form POST downgrade through proxy)
@@ -87,7 +95,7 @@ cp railway.toml railway.current.toml
 cp railway.worker.toml railway.current.toml
 ```
 
-For the UI service use Dockerfile:
+For the optional standalone UI service use Dockerfile:
 
 - `agents/aikido-reviewer/Dockerfile.kodosumi-ui`
 
@@ -108,7 +116,8 @@ Panel URL to open in browser:
 
 - `https://<panel-service>.up.railway.app/`
 
-Important: the `kodosumi-ui` URL is not the panel frontend. It is the OpenAPI/form app that the panel registers.
+Important: the `kodosumi-ui` URL is not the panel frontend. It is only an OpenAPI/form app.
+For end-to-end panel execution on Railway, use colocated UI in the panel service (`KODO_LOCAL_UI_ENABLED=true`) so submitted executions and status/timeline reads use the same execution store.
 Panel login username is always `admin`; password is `KODO_ADMIN_PASSWORD`.
 Panel routes to use after login:
 - `/admin/flow`
