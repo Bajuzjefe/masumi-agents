@@ -348,14 +348,28 @@ def _patch_health_runner_probe() -> None:
             "            break\n"
             "    return probes\n"
         )
-    if "\"runner_probe\":" not in text and "\"named_actors_sample\": sorted(named_actors)[:20]," in text:
-        text = text.replace(
-            "        \"named_actors_sample\": sorted(named_actors)[:20],\n"
-            "        \"state_actors_sample\": state_actors[:20],\n",
+    if "\"runner_probe\":" not in text:
+        pair = (
             "        \"named_actors_sample\": sorted(named_actors)[:20],\n"
             "        \"state_actors_sample\": state_actors[:20],\n"
-            "        \"runner_probe\": _codex_runner_probe(named_actors),\n",
         )
+        if pair in text:
+            text = text.replace(
+                pair,
+                "        \"named_actors_sample\": sorted(named_actors)[:20],\n"
+                "        \"state_actors_sample\": state_actors[:20],\n"
+                "        \"runner_probe\": _codex_runner_probe(named_actors),\n",
+                1,
+            )
+        else:
+            solo = "        \"named_actors_sample\": sorted(named_actors)[:20],\n"
+            if solo in text:
+                text = text.replace(
+                    solo,
+                    "        \"named_actors_sample\": sorted(named_actors)[:20],\n"
+                    "        \"runner_probe\": _codex_runner_probe(named_actors),\n",
+                    1,
+                )
     path.write_text(text, encoding="utf-8")
 
 
