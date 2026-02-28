@@ -116,31 +116,50 @@ def _do_ray_init() -> None:
             attach_first = str(
                 os.getenv("KODOSUMI_RAY_ATTACH_EXISTING", "true")
             ).strip().lower() in {"1", "true", "yes"}
+            attach_required = str(
+                os.getenv("KODOSUMI_RAY_ATTACH_REQUIRED", "false")
+            ).strip().lower() in {"1", "true", "yes"}
             attach_address = (
                 str(os.getenv("KODOSUMI_RAY_ADDRESS", "")).strip()
                 or str(os.getenv("RAY_ADDRESS", "")).strip()
                 or "auto"
             )
+            attach_retries = max(1, int(os.getenv("KODOSUMI_RAY_ATTACH_RETRIES", "10")))
+            attach_retry_delay = float(os.getenv("KODOSUMI_RAY_ATTACH_RETRY_DELAY_SECONDS", "1"))
             attached = False
             if attach_first:
-                try:
-                    ray.init(
-                        address=attach_address,
-                        namespace=namespace,
-                        ignore_reinit_error=True,
-                        logging_level="WARNING",
-                    )
-                    attached = True
-                    logger.info(
-                        "Kodosumi Ray warmup attached to existing cluster (address=%s)",
-                        attach_address,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Kodosumi Ray attach failed (address=%s): %r; "
-                        "falling back to local Ray init",
-                        attach_address,
-                        exc,
+                last_exc: Exception | None = None
+                for attempt in range(1, attach_retries + 1):
+                    try:
+                        ray.init(
+                            address=attach_address,
+                            namespace=namespace,
+                            ignore_reinit_error=True,
+                            logging_level="WARNING",
+                        )
+                        attached = True
+                        logger.info(
+                            "Kodosumi Ray warmup attached to existing cluster "
+                            "(address=%s, attempt=%d)",
+                            attach_address,
+                            attempt,
+                        )
+                        break
+                    except Exception as exc:
+                        last_exc = exc
+                        logger.warning(
+                            "Kodosumi Ray attach failed (address=%s, attempt=%d/%d): %r",
+                            attach_address,
+                            attempt,
+                            attach_retries,
+                            exc,
+                        )
+                        if attempt < attach_retries:
+                            time.sleep(attach_retry_delay)
+                if not attached and attach_required:
+                    raise RuntimeError(
+                        "KODOSUMI_RAY_ATTACH_REQUIRED=true and attach did not succeed; "
+                        f"last_error={last_exc!r}"
                     )
             if not attached:
                 ray.init(
