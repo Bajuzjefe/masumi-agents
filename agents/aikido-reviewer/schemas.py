@@ -118,7 +118,7 @@ class ReviewReport(BaseModel):
     schema_version: str = "aikido.review.v1"
     project: str
     aikido_version: str = "aikido.findings.v1"
-    review_depth: str  # quick | standard | deep
+    review_depth: str  # deep
     total_findings: int
     classification_summary: ClassificationSummary
     risk_score: float = Field(ge=0.0, le=10.0)

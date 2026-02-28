@@ -38,16 +38,6 @@ input_form = F.Model([
         label="Source Code Files (JSON dict)",
         name="source_files",
     ),
-    F.Select(
-        label="Review Depth",
-        name="review_depth",
-        options=[
-            {"value": "quick", "label": "Quick — Heuristic only, instant, no LLM cost"},
-            {"value": "standard", "label": "Standard — LLM review for critical/high findings"},
-            {"value": "deep", "label": "Deep — Two-pass LLM with cross-finding correlation"},
-        ],
-        default="standard",
-    ),
     F.Submit(),
     F.Cancel(),
 ])
@@ -62,7 +52,7 @@ async def review_handler(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Kodosumi entrypoint — receives form data, runs review pipeline."""
     aikido_report = payload.get("aikido_report", "")
     source_files = payload.get("source_files", "{}")
-    review_depth = payload.get("review_depth", "standard")
+    review_depth = "deep"
 
     if not aikido_report:
         return {"error": "aikido_report is required"}

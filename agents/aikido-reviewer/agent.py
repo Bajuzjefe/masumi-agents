@@ -20,7 +20,7 @@ def process_job(input_data: dict) -> dict:
     input_data keys:
         aikido_report: str — JSON string of aikido.findings.v1 report
         source_files: str — JSON string of {path: source_code} dict
-        review_depth: str — "quick" | "standard" | "deep" (default: "standard")
+        review_depth: str — deprecated input, ignored (always "deep")
     """
     return asyncio.run(process_job_async(input_data))
 
@@ -30,10 +30,10 @@ async def process_job_async(input_data: dict) -> dict:
     # Parse inputs
     aikido_json = input_data.get("aikido_report", "")
     source_json = input_data.get("source_files", "{}")
-    depth = input_data.get("review_depth", "standard")
-
-    if depth not in ("quick", "standard", "deep"):
-        depth = "standard"
+    requested_depth = str(input_data.get("review_depth", "")).strip().lower()
+    depth = "deep"
+    if requested_depth and requested_depth != "deep":
+        logger.info("Ignoring requested review_depth=%s; deep mode is enforced", requested_depth)
 
     logger.info("Starting aikido review job (depth=%s)", depth)
 

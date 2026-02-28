@@ -3,12 +3,13 @@
 All review requests go through Masumi payment flow. No free/standalone access.
 """
 
+import asyncio
 import json
 import logging
 import os
 import time
 import uuid
-from typing import List
+from typing import Dict, List
 
 import uvicorn
 from dotenv import load_dotenv
@@ -18,6 +19,11 @@ from masumi.payment import Payment
 from pydantic import BaseModel
 
 from agent import process_job_async
+from scan_runner import (
+    contains_aiken_toml,
+    run_aikido_scan_from_repo,
+    run_aikido_scan_from_source_files,
+)
 
 load_dotenv(override=True)
 
@@ -59,9 +65,10 @@ class StartJobRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "input_data": [
+                    {"key": "scan_mode", "value": "manual"},
+                    {"key": "repo_url", "value": "https://github.com/org/repo"},
                     {"key": "aikido_report", "value": "{...}"},
                     {"key": "source_files", "value": "{...}"},
-                    {"key": "review_depth", "value": "standard"},
                 ]
             }
         }
@@ -77,6 +84,23 @@ async def execute_agentic_task(input_data: dict) -> dict:
     result = await process_job_async(input_data)
     logger.info("Aikido review task completed")
     return result
+
+
+def _parse_source_files(value: str | Dict[str, str]) -> Dict[str, str]:
+    source_data = json.loads(value) if isinstance(value, str) else value
+    if not isinstance(source_data, dict) or len(source_data) == 0:
+        raise ValueError("Must contain at least one file entry")
+    for file_path, content in source_data.items():
+        if not isinstance(file_path, str) or not isinstance(content, str):
+            raise ValueError("All source_files keys and values must be strings")
+    return source_data
+
+
+def _get_source_files_if_provided(input_data: Dict[str, str]) -> Dict[str, str] | None:
+    raw = input_data.get("source_files")
+    if raw is None:
+        return None
+    return _parse_source_files(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -98,14 +122,28 @@ async def start_job(data: StartJobRequest):
 
         identifier_from_purchaser = uuid.uuid4().hex[:24]  # 24-char hex string
         input_data_dict = {item.key: item.value for item in data.input_data}
+        requested_depth = str(input_data_dict.get("review_depth", "")).strip().lower()
+        input_data_dict["review_depth"] = "deep"
+        if requested_depth and requested_depth != "deep":
+            logger.info("Ignoring requested review_depth=%s; deep mode is enforced", requested_depth)
 
-        if "aikido_report" not in input_data_dict:
+        scan_mode = str(input_data_dict.get("scan_mode", "manual")).strip().lower()
+        input_data_dict["scan_mode"] = scan_mode
+
+        if scan_mode not in ("manual", "auto"):
             raise HTTPException(
                 status_code=400,
-                detail="'aikido_report' is required in input_data.",
+                detail="'scan_mode' must be either 'manual' or 'auto'.",
             )
 
-        if "source_files" not in input_data_dict:
+        report_raw = str(input_data_dict.get("aikido_report", "")).strip()
+        repo_url = str(input_data_dict.get("repo_url", "")).strip()
+        repo_ref = str(input_data_dict.get("repo_ref", "")).strip() or None
+        repo_subpath = str(input_data_dict.get("repo_subpath", "")).strip() or None
+
+        has_source_files = "source_files" in input_data_dict and str(input_data_dict.get("source_files", "")).strip() != ""
+
+        if scan_mode == "manual" and not has_source_files:
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -116,26 +154,68 @@ async def start_job(data: StartJobRequest):
                 ),
             )
 
-        # Validate both are valid JSON before creating a payment request
-        try:
-            report_data = json.loads(input_data_dict["aikido_report"])
-            if not isinstance(report_data, dict) or "findings" not in report_data:
-                raise ValueError("Missing 'findings' key")
-        except (json.JSONDecodeError, ValueError) as e:
+        source_data = None
+        if has_source_files:
+            # Validate source files if present.
+            try:
+                source_data = _parse_source_files(input_data_dict["source_files"])
+            except (json.JSONDecodeError, ValueError) as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"'source_files' must be a non-empty JSON object mapping file paths to source code: {e}",
+                )
+
+        # manual mode: report is mandatory
+        if scan_mode == "manual" and not report_raw:
             raise HTTPException(
                 status_code=400,
-                detail=f"'aikido_report' must be valid Aikido JSON (aikido.findings.v1): {e}",
+                detail="'aikido_report' is required in manual scan_mode.",
             )
 
-        try:
-            source_data = json.loads(input_data_dict["source_files"])
-            if not isinstance(source_data, dict) or len(source_data) == 0:
-                raise ValueError("Must contain at least one file entry")
-        except (json.JSONDecodeError, ValueError) as e:
+        # auto mode: report is optional; if omitted, agent runs Aikido CLI after payment
+        if scan_mode == "auto" and not report_raw:
+            if repo_url:
+                # repo_url path validated later during scan
+                pass
+            elif source_data and contains_aiken_toml(source_data):
+                pass
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Auto scan mode requires either repo_url or a complete Aiken project in source_files, "
+                        "including aiken.toml."
+                    ),
+                )
+
+        if scan_mode == "auto" and repo_url:
+            # Keep these in canonical fields for background scan
+            input_data_dict["repo_url"] = repo_url
+            if repo_ref:
+                input_data_dict["repo_ref"] = repo_ref
+            if repo_subpath:
+                input_data_dict["repo_subpath"] = repo_subpath
+
+        if scan_mode == "auto" and not report_raw and source_data and not contains_aiken_toml(source_data):
             raise HTTPException(
                 status_code=400,
-                detail=f"'source_files' must be a non-empty JSON object mapping file paths to source code: {e}",
+                detail=(
+                    "Auto scan mode with source_files requires a complete Aiken project "
+                    "including aiken.toml."
+                ),
             )
+
+        # if a report is provided (manual mode or auto override), validate shape now
+        if report_raw:
+            try:
+                report_data = json.loads(report_raw)
+                if not isinstance(report_data, dict) or "findings" not in report_data:
+                    raise ValueError("Missing 'findings' key")
+            except (json.JSONDecodeError, ValueError) as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"'aikido_report' must be valid Aikido JSON (aikido.findings.v1): {e}",
+                )
 
         config = Config(
             payment_service_url=PAYMENT_SERVICE_URL,
@@ -196,8 +276,42 @@ async def handle_payment_status(job_id: str, payment_id: str) -> None:
     """Execute task after payment confirmation."""
     try:
         logger.info("Payment %s completed for job %s, executing task...", payment_id, job_id)
-        jobs[job_id]["status"] = "running"
         input_data = jobs[job_id]["input_data"]
+        scan_mode = str(input_data.get("scan_mode", "manual")).strip().lower()
+        report_raw = str(input_data.get("aikido_report", "")).strip()
+
+        if scan_mode == "auto" and not report_raw:
+            jobs[job_id]["status"] = "running_scan"
+            logger.info("Running Aikido CLI auto scan for job %s", job_id)
+            repo_url = str(input_data.get("repo_url", "")).strip()
+
+            if repo_url:
+                repo_ref = str(input_data.get("repo_ref", "")).strip() or None
+                repo_subpath = str(input_data.get("repo_subpath", "")).strip() or None
+                report_data, normalized_sources = await asyncio.to_thread(
+                    run_aikido_scan_from_repo,
+                    repo_url,
+                    repo_ref,
+                    repo_subpath,
+                )
+            else:
+                source_data = _get_source_files_if_provided(input_data)
+                if source_data is None:
+                    raise ValueError("Auto scan expected source_files or repo_url.")
+                report_data, normalized_sources = await asyncio.to_thread(
+                    run_aikido_scan_from_source_files,
+                    source_data,
+                )
+
+            input_data["aikido_report"] = json.dumps(report_data)
+            input_data["source_files"] = json.dumps(normalized_sources)
+            jobs[job_id]["scan_summary"] = {
+                "schema_version": report_data.get("schema_version"),
+                "total_findings": report_data.get("total", len(report_data.get("findings", []))),
+                "scan_mode": "repo" if repo_url else "source_files",
+            }
+
+        jobs[job_id]["status"] = "running"
 
         result = await execute_agentic_task(input_data)
 
@@ -231,7 +345,13 @@ async def get_status(job_id: str):
     if job_id in payment_instances:
         try:
             status = await payment_instances[job_id].check_payment_status()
-            job["payment_status"] = status.get("data", {}).get("status")
+            resolved_status = None
+            if isinstance(status, dict):
+                resolved_status = status.get("data", {}).get("status")
+            if resolved_status:
+                job["payment_status"] = resolved_status
+            elif not job.get("payment_status"):
+                job["payment_status"] = "pending"
         except Exception:
             job["payment_status"] = "unknown"
 
@@ -240,6 +360,8 @@ async def get_status(job_id: str):
         "status": job["status"],
         "payment_status": job["payment_status"],
         "result": job.get("result"),
+        "scan_summary": job.get("scan_summary"),
+        "error": job.get("error"),
     }
 
 
@@ -267,14 +389,65 @@ async def input_schema():
     return {
         "input_data": [
             {
+                "id": "scan_mode",
+                "type": "string",
+                "name": "Scan Mode",
+                "required": False,
+                "data": {
+                    "description": (
+                        "Optional. 'manual' (default) expects aikido_report + source_files. "
+                        "'auto' allows omitting aikido_report and the agent will run Aikido CLI "
+                        "after payment using source_files or repo_url."
+                    ),
+                    "placeholder": "manual",
+                },
+            },
+            {
+                "id": "repo_url",
+                "type": "string",
+                "name": "Repository URL",
+                "required": False,
+                "data": {
+                    "description": (
+                        "Optional in auto mode. HTTPS git repository URL containing an Aiken project. "
+                        "If provided and aikido_report is omitted, the agent clones and scans this repo."
+                    ),
+                    "placeholder": "https://github.com/org/repo",
+                },
+            },
+            {
+                "id": "repo_ref",
+                "type": "string",
+                "name": "Repository Ref",
+                "required": False,
+                "data": {
+                    "description": "Optional branch/tag to scan in auto mode.",
+                    "placeholder": "main",
+                },
+            },
+            {
+                "id": "repo_subpath",
+                "type": "string",
+                "name": "Repository Subpath",
+                "required": False,
+                "data": {
+                    "description": (
+                        "Optional relative path inside repo where aiken.toml lives. "
+                        "Defaults to repository root."
+                    ),
+                    "placeholder": "contracts/my-aiken-project",
+                },
+            },
+            {
                 "id": "aikido_report",
                 "type": "string",
                 "name": "Aikido JSON Report",
-                "required": True,
+                "required": False,
                 "data": {
                     "description": (
-                        "REQUIRED. The full JSON output from an Aikido scan "
-                        "(aikido.findings.v1 schema). Run 'aikido scan --format json' "
+                        "Required in manual mode. Optional in auto mode. "
+                        "The full JSON output from an Aikido scan "
+                        "(aikido.findings.v1 schema). Run 'aikido . --format json' "
                         "to generate this."
                     ),
                     "placeholder": '{"schema_version": "aikido.findings.v1", ...}',
@@ -284,30 +457,17 @@ async def input_schema():
                 "id": "source_files",
                 "type": "string",
                 "name": "Source Code Files (JSON dict)",
-                "required": True,
+                "required": False,
                 "data": {
                     "description": (
-                        "REQUIRED. A JSON object mapping file paths to source code "
+                        "Required for manual mode. In auto mode, required only if repo_url is not provided. "
+                        "A JSON object mapping file paths to source code "
                         "contents. The reviewer needs your actual Aiken source code to "
-                        "verify findings against real contract logic. Without it, "
-                        "classifications cannot be accurate. "
-                        'Example: {"validators/foo.ak": "validator foo { ... }"}'
+                        "verify findings against real contract logic. In auto mode this must "
+                        "contain a complete Aiken project including aiken.toml. "
+                        'Example: {"aiken.toml": "...", "validators/foo.ak": "validator foo { ... }"}'
                     ),
                     "placeholder": '{"validators/main.ak": "..."}',
-                },
-            },
-            {
-                "id": "review_depth",
-                "type": "string",
-                "name": "Review Depth",
-                "data": {
-                    "description": (
-                        "How deeply to review findings. "
-                        "'quick' = heuristic only (instant, no LLM). "
-                        "'standard' = LLM review for critical/high findings. "
-                        "'deep' = two-pass LLM with cross-finding correlation."
-                    ),
-                    "placeholder": "standard",
                 },
             },
         ]

@@ -28,13 +28,19 @@ echo ""
 
 # 1. Health check
 echo "1. Checking payment service health..."
-HEALTH=$(curl -s "${PAYMENT_URL%/api/v1}/health" 2>/dev/null || echo "FAILED")
-if echo "$HEALTH" | grep -q "healthy"; then
+HEALTH=$(curl -s "${PAYMENT_URL%/}/health" 2>/dev/null || echo "FAILED")
+if echo "$HEALTH" | grep -q "\"status\":\"ok\""; then
     echo "   Payment service is healthy."
 else
+    # Backward-compatible fallback when PAYMENT_URL is base URL (without /api/v1).
+    FALLBACK_HEALTH=$(curl -s "${PAYMENT_URL%/api/v1}/health" 2>/dev/null || echo "FAILED")
+    if echo "$FALLBACK_HEALTH" | grep -q "healthy"; then
+        echo "   Payment service is healthy."
+    else
     echo "   ERROR: Payment service not reachable at ${PAYMENT_URL}"
     echo "   Run: docker compose up -d"
     exit 1
+    fi
 fi
 
 echo ""
@@ -47,9 +53,15 @@ echo "   d) Register your agent via POST /registry/ with:"
 echo ""
 echo "      {"
 echo "        \"name\": \"Aikido Audit Reviewer\","
-echo "        \"description\": \"AI-powered triage of Aikido security analysis findings for Aiken smart contracts\","
-echo "        \"agentUrl\": \"${AGENT_API_URL}\","
-echo "        \"network\": \"PREPROD\""
+echo "        \"description\": \"Deep AI triage of Aikido findings for Aiken smart contracts\","
+echo "        \"apiBaseUrl\": \"${AGENT_API_URL}\","
+echo "        \"network\": \"Preprod\","
+echo "        \"sellingWalletVkey\": \"<from step b>\","
+echo "        \"Tags\": [\"security\", \"aikido\", \"aiken\", \"cardano\"],"
+echo "        \"Capability\": {\"name\": \"Aikido Security Review\", \"version\": \"1.0.0\"},"
+echo "        \"Author\": {\"name\": \"Your Name\"},"
+echo "        \"ExampleOutputs\": [{\"name\": \"review_result\", \"url\": \"https://example.com/review-result.json\", \"mimeType\": \"application/json\"}],"
+echo "        \"AgentPricing\": {\"pricingType\": \"Fixed\", \"Pricing\": [{\"unit\": \"USDM\", \"amount\": \"4990000\"}]}"
 echo "      }"
 echo ""
 echo "   e) After registration, call GET /registry/ to get your agentIdentifier"

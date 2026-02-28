@@ -313,15 +313,15 @@ async def _review_batch(
 async def analyze_findings(
     findings: List[AikidoFinding],
     source_files: Dict[str, str],
-    depth: str = "standard",
+    depth: str = "deep",
     anthropic_credential: Optional[str] = None,
 ) -> List[FindingReview]:
     """Analyze all findings and return reviews.
 
     depth:
+        - "deep": Standard + second correlation pass (default and recommended).
         - "quick": Heuristic only, no LLM calls.
         - "standard": Critical/High get individual LLM calls; Medium/Low/Info batched.
-        - "deep": Standard + second correlation pass.
     """
     if depth == "quick":
         reviews = []
