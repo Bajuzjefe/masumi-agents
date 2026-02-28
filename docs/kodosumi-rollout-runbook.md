@@ -7,6 +7,8 @@ Scope: `aikido-reviewer` hybrid deployment on Railway
 
 - API service: `aikido-reviewer-api` (public MIP-003 endpoints)
 - Worker service: `aikido-reviewer-kodosumi-worker` (private `/internal/execute`)
+- OpenAPI form service: `aikido-reviewer-kodosumi-ui` (public `openapi.json`)
+- Kodosumi control plane: `aikido-reviewer-kodosumi-panel` (admin frontend + API)
 
 ## Required secrets and vars
 
@@ -22,6 +24,16 @@ API service:
 Worker service:
 
 - `KODOSUMI_INTERNAL_TOKEN` (must match API)
+
+Panel service:
+
+- `REGISTER_ENDPOINT` (`https://<kodosumi-ui>/openapi.json`)
+- `KODO_ADMIN_EMAIL`
+- `KODO_ADMIN_PASSWORD`
+- `KODO_SECRET_KEY`
+- `KODO_RESET_ADMIN_DB` (`true` once, then `false`)
+- `HOST=0.0.0.0`
+- `PORT=8080`
 
 ## Canary rollout
 
@@ -45,11 +57,13 @@ Railway-first onboarding (no local runtime required):
 
 1. Ensure the public Kodosumi UI service is healthy:
    - `GET https://aikido-reviewer-kodosumi-ui-production.up.railway.app/health`
-2. Register the agent in Koco using OpenAPI from:
+2. Ensure the panel service is healthy and reachable:
+   - `GET https://aikido-reviewer-kodosumi-panel-production.up.railway.app/health`
+3. Register the agent in panel/Koco using OpenAPI from:
    - `https://aikido-reviewer-kodosumi-ui-production.up.railway.app/openapi.json`
-3. Confirm Koco can fetch form schema from:
+4. Confirm Koco can fetch form schema from:
    - `GET https://aikido-reviewer-kodosumi-ui-production.up.railway.app/`
-4. Keep API canary disabled until registration and schema sync are verified:
+5. Keep API canary disabled until registration and schema sync are verified:
    - `KODOSUMI_ENABLED=false`
 
 ## Monitoring checks

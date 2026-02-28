@@ -1,0 +1,48 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY agents/aikido-reviewer/requirements-worker.txt requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Patch known syntax regressions in current upstream kodosumi package builds.
+RUN python - <<'PY'
+from pathlib import Path
+
+forms_path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/service/inputs/forms.py")
+if forms_path.exists():
+    text = forms_path.read_text(encoding="utf-8")
+    old = '{"\\n".join(self.error if self.error else [])}'
+    new = '{chr(10).join(self.error if self.error else [])}'
+    if old in text:
+        forms_path.write_text(text.replace(old, new), encoding="utf-8")
+        print("patched forms.py")
+
+timeline_path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/service/inputs/timeline/tool.py")
+if timeline_path.exists():
+    text = timeline_path.read_text(encoding="utf-8")
+    old = 'search.append(f"inputs:{result["inputs"]}")'
+    new = "search.append(f\"inputs:{result['inputs']}\")"
+    if old in text:
+        timeline_path.write_text(text.replace(old, new), encoding="utf-8")
+        print("patched timeline/tool.py")
+
+health_path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/service/health.py")
+if health_path.exists():
+    text = health_path.read_text(encoding="utf-8")
+    old = 'status_code=200, \\n         operation_id='
+    new = 'status_code=200, opt={"no_auth": True}, \\n         operation_id='
+    if old in text:
+        health_path.write_text(text.replace(old, new), encoding="utf-8")
+        print("patched health.py auth")
+PY
+
+COPY agents/aikido-reviewer/ .
+
+EXPOSE 8080
+
+CMD ["python", "panel_main.py"]

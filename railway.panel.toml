@@ -1,0 +1,7 @@
+[build]
+dockerfilePath = "agents/aikido-reviewer/Dockerfile.kodosumi-panel"
+builder = "dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300

@@ -13,7 +13,7 @@ AI-powered triage of [Aikido](https://github.com/Bajuzjefe/aikido) security anal
 
 ## Setup
 
-### Railway Deployment (hybrid API + Kodosumi worker)
+### Railway Deployment (API + worker + Kodosumi control plane)
 
 `railway.toml` is configured for API service deployment (`agents/aikido-reviewer/Dockerfile`).
 `railway.worker.toml` is provided for the Kodosumi worker service (`agents/aikido-reviewer/Dockerfile.kodosumi-worker`).
@@ -22,7 +22,8 @@ Create two Railway services in the same project:
 
 1. `aikido-reviewer-api` (public MIP-003 API)
 2. `aikido-reviewer-kodosumi-worker` (internal execution worker)
-3. `aikido-reviewer-kodosumi-ui` (public Kodosumi UI + OpenAPI for koco register)
+3. `aikido-reviewer-kodosumi-ui` (public agent OpenAPI/form endpoint)
+4. `aikido-reviewer-kodosumi-panel` (Kodosumi admin web panel/control plane)
 
 Set these Railway variables on the API service:
 
@@ -56,6 +57,18 @@ Set these Railway variables on the Kodosumi UI service:
 - `KODOSUMI_RAY_OBJECT_STORE_MEMORY=78643200`
 - optional: `KODOSUMI_INTERNAL_TOKEN` (only needed if you also expose internal execution on same runtime)
 
+Set these Railway variables on the Kodosumi panel service:
+
+- `REGISTER_ENDPOINT=https://<kodosumi-ui-service>.up.railway.app/openapi.json`
+- `KODO_ADMIN_EMAIL` (for panel login, e.g. `admin@example.com`)
+- `KODO_ADMIN_PASSWORD` (for panel login)
+- `KODO_SECRET_KEY` (JWT signing secret for panel auth)
+- `HOST=0.0.0.0`
+- `PORT=8080`
+- optional one-time reset: `KODO_RESET_ADMIN_DB=true` (set back to `false` after first successful login)
+- optional: `KODOSUMI_RAY_NUM_CPUS=1`
+- optional: `KODOSUMI_RAY_OBJECT_STORE_MEMORY=78643200`
+
 Optional (auto-scan tuning):
 - `AIKIDO_TIMEOUT_SECONDS`
 - `AIKIDO_GIT_CLONE_TIMEOUT_SECONDS`
@@ -78,6 +91,22 @@ For the UI service use Dockerfile:
 Start command is baked into image:
 
 - `python ui_main.py`
+
+For the panel service use:
+
+- `railway.panel.toml`
+- Dockerfile `agents/aikido-reviewer/Dockerfile.kodosumi-panel`
+
+Start command is baked into image:
+
+- `python panel_main.py`
+
+Panel URL to open in browser:
+
+- `https://<panel-service>.up.railway.app/`
+
+Important: the `kodosumi-ui` URL is not the panel frontend. It is the OpenAPI/form app that the panel registers.
+Panel `/health` will report `spooler_status.error = "Spooler not found"` in this Railway profile; this is expected for UI/control-plane use.
 
 ### 1. Start Masumi node
 
