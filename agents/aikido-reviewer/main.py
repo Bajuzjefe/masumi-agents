@@ -12,6 +12,7 @@ import os
 import time
 import uuid
 from typing import Dict, List
+import httpx
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -53,6 +54,7 @@ app = FastAPI(
 # In-memory job store (not for production)
 jobs: dict = {}
 payment_instances: dict = {}
+purchase_resolve_tasks: dict = {}
 server_start_time = time.time()
 
 
@@ -83,6 +85,99 @@ def _new_execution_meta() -> dict:
         "duration_ms": None,
         "fallback_used": False,
     }
+
+
+def _purchase_resolve_enabled() -> bool:
+    return parse_bool(os.getenv("AUTO_PURCHASE_RESOLVE_ENABLED", "true"), default=True)
+
+
+def _purchase_resolve_interval_seconds() -> float:
+    raw = str(os.getenv("AUTO_PURCHASE_RESOLVE_INTERVAL_SECONDS", "20")).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 20.0
+    return value if value > 1 else 20.0
+
+
+def _purchase_resolve_timeout_seconds() -> float:
+    raw = str(os.getenv("AUTO_PURCHASE_RESOLVE_TIMEOUT_SECONDS", "10")).strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 10.0
+    return value if value > 1 else 10.0
+
+
+def _payment_headers() -> dict:
+    return {
+        "token": PAYMENT_AUTH,
+        "content-type": "application/json",
+    }
+
+
+async def _resolve_purchase_once(payment_id: str, network: str) -> dict | None:
+    """Trigger payment-service purchase resolution for one blockchain identifier."""
+    endpoint = f"{PAYMENT_SERVICE_URL.rstrip('/')}/purchase/resolve-blockchain-identifier"
+    payload = {
+        "blockchainIdentifier": payment_id,
+        "network": network,
+    }
+    async with httpx.AsyncClient(timeout=_purchase_resolve_timeout_seconds()) as client:
+        response = await client.post(endpoint, headers=_payment_headers(), json=payload)
+        if response.status_code in {401, 403, 404}:
+            logger.warning(
+                "Purchase resolve endpoint unavailable for payment_id=%s (status=%s).",
+                payment_id,
+                response.status_code,
+            )
+            return None
+        response.raise_for_status()
+        return response.json()
+
+
+async def _auto_resolve_purchase_loop(job_id: str, payment_id: str, network: str) -> None:
+    """Keep purchase state progressing without requiring external/manual resolve calls."""
+    try:
+        while True:
+            job = jobs.get(job_id)
+            if not job:
+                return
+            if job.get("status") in {"completed", "failed"}:
+                return
+            if job.get("payment_status") == "completed":
+                return
+            if job_id not in payment_instances:
+                return
+
+            try:
+                result = await _resolve_purchase_once(payment_id=payment_id, network=network)
+                next_action = None
+                on_chain_state = None
+                if isinstance(result, dict):
+                    data = result.get("data", {})
+                    if isinstance(data, dict):
+                        next_action = data.get("NextAction", {}).get("requestedAction")
+                        on_chain_state = data.get("onChainState")
+                if next_action or on_chain_state:
+                    logger.info(
+                        "Auto purchase-resolve job_id=%s payment_id=%s nextAction=%s onChainState=%s",
+                        job_id,
+                        payment_id,
+                        next_action,
+                        on_chain_state,
+                    )
+            except Exception as exc:  # noqa: BLE001 - resolver must never crash job flow
+                logger.warning(
+                    "Auto purchase-resolve failed for job_id=%s payment_id=%s: %s",
+                    job_id,
+                    payment_id,
+                    exc,
+                )
+
+            await asyncio.sleep(_purchase_resolve_interval_seconds())
+    finally:
+        purchase_resolve_tasks.pop(job_id, None)
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +394,14 @@ async def start_job(data: StartJobRequest, request: Request):
 
         payment_instances[job_id] = payment
         await payment.start_status_monitoring(payment_callback)
+        if _purchase_resolve_enabled():
+            purchase_resolve_tasks[job_id] = asyncio.create_task(
+                _auto_resolve_purchase_loop(
+                    job_id=job_id,
+                    payment_id=payment_id,
+                    network=NETWORK,
+                )
+            )
 
         seller_vkey = os.getenv("SELLER_VKEY", "")
 
@@ -429,6 +532,9 @@ async def handle_payment_status(job_id: str, payment_id: str) -> None:
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["error"] = str(e)
     finally:
+        task = purchase_resolve_tasks.pop(job_id, None)
+        if task is not None:
+            task.cancel()
         if job_id in payment_instances:
             payment_instances[job_id].stop_status_monitoring()
             del payment_instances[job_id]
