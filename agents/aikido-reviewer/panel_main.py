@@ -55,6 +55,22 @@ def _patch_inputs_force_https_panel_proxy() -> None:
         path.write_text(text, encoding="utf-8")
 
 
+def _patch_proxy_host_forwarding() -> None:
+    """Railway fix: do not forward panel host header when proxying to registered app."""
+    path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/service/proxy.py")
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    needle = 'request_headers.pop("content-length", None)'
+    replacement = (
+        'request_headers.pop("content-length", None)\n'
+        '            request_headers.pop("host", None)\n'
+        '            request_headers.pop("Host", None)'
+    )
+    if needle in text and replacement not in text:
+        path.write_text(text.replace(needle, replacement), encoding="utf-8")
+
+
 def _patch_health_auth() -> None:
     """Allow unauthenticated /health so Railway health checks can pass."""
     path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/service/health.py")
@@ -97,6 +113,8 @@ def main() -> int:
         _patch_health_auth()
     if os.getenv("KODO_PATCH_HTTPS_PROXY", "true").strip().lower() in {"1", "true", "yes"}:
         _patch_inputs_force_https_panel_proxy()
+    if os.getenv("KODO_PATCH_PROXY_HOST", "true").strip().lower() in {"1", "true", "yes"}:
+        _patch_proxy_host_forwarding()
     _reset_admin_db_if_requested()
 
     _run(["ray", "stop", "--force"], check=False)
