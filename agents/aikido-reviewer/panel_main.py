@@ -222,7 +222,10 @@ def _patch_health_actor_debug() -> None:
     if "named_actors_count" in text:
         return
     if "from ray.util import list_named_actors" not in text:
-        text = text.replace("import ray\n", "import ray\nfrom ray.util import list_named_actors\n")
+        text = text.replace(
+            "import ray\n",
+            "import ray\nfrom ray.util import list_named_actors\nfrom ray.util.state import list_actors\n",
+        )
     target = (
         "    return {\n"
         "        \"kodosumi_version\": kodosumi.__version__,\n"
@@ -234,6 +237,7 @@ def _patch_health_actor_debug() -> None:
     )
     replacement = (
         "    named_actors = []\n"
+        "    state_actors = []\n"
         "    try:\n"
         "        for item in list_named_actors(all_namespaces=True):\n"
         "            if isinstance(item, dict):\n"
@@ -242,6 +246,17 @@ def _patch_health_actor_debug() -> None:
         "                named_actors.append(str(item))\n"
         "    except Exception:\n"
         "        named_actors = [\"<error>\"]\n"
+        "    try:\n"
+        "        for state in list_actors(filters=[(\"state\", \"=\", \"ALIVE\")]):\n"
+        "            name = str(getattr(state, \"name\", \"\"))\n"
+        "            if _is_runner_name(name) or name in {\"register\", \"Spooler\"}:\n"
+        "                state_actors.append({\n"
+        "                    \"name\": name,\n"
+        "                    \"state\": str(getattr(state, \"state\", \"\")),\n"
+        "                    \"class_name\": str(getattr(state, \"class_name\", \"\")),\n"
+        "                })\n"
+        "    except Exception:\n"
+        "        state_actors = [{\"name\": \"<error>\", \"state\": \"\", \"class_name\": \"\"}]\n"
         "    return {\n"
         "        \"kodosumi_version\": kodosumi.__version__,\n"
         "        \"python_version\": sys.version,\n"
@@ -250,6 +265,7 @@ def _patch_health_actor_debug() -> None:
         "        \"spooler_status\": spooler_status,\n"
         "        \"named_actors_count\": len(named_actors),\n"
         "        \"named_actors_sample\": sorted(named_actors)[:20],\n"
+        "        \"state_actors_sample\": state_actors[:20],\n"
         "    }\n"
     )
     if target in text:
