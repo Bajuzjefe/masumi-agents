@@ -247,6 +247,8 @@ def main() -> int:
         _patch_spooler_actor_discovery()
     _reset_admin_db_if_requested()
 
+    include_dashboard = "true" if _is_true("KODOSUMI_RAY_INCLUDE_DASHBOARD", "true") else "false"
+
     _run(["ray", "stop", "--force"], check=False)
     ray_cmd = [
         "ray",
@@ -255,7 +257,7 @@ def main() -> int:
         "--port",
         "6379",
         "--disable-usage-stats",
-        "--include-dashboard=false",
+        f"--include-dashboard={include_dashboard}",
         "--num-cpus",
         os.getenv("KODOSUMI_RAY_NUM_CPUS", "1"),
         "--object-store-memory",
