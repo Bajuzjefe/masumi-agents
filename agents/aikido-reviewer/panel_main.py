@@ -238,7 +238,7 @@ def _patch_spooler_actor_discovery() -> None:
     if not path.exists():
         return
     text = path.read_text(encoding="utf-8")
-    if "_list_runner_states" in text and "list_named_actors" in text:
+    if "_list_runner_states" in text and "list_named_actors" in text and "codex override: robust runner discovery" in text:
         return
 
     if "from ray.util import list_named_actors" not in text:
@@ -304,6 +304,36 @@ def _patch_spooler_actor_discovery() -> None:
         text = text.replace(old_block_original, replacement)
     if old_block_patched in text:
         text = text.replace(old_block_patched, replacement)
+
+    override = (
+        "\n\n# codex override: robust runner discovery\n"
+        "def _list_runner_states():\n"
+        "    from types import SimpleNamespace\n"
+        "    states = []\n"
+        "    try:\n"
+        "        raw_states = list_actors(filters=[(\"state\", \"=\", \"ALIVE\")])\n"
+        "        for state in raw_states:\n"
+        "            class_name = str(getattr(state, \"class_name\", \"\"))\n"
+        "            state_name = str(getattr(state, \"name\", \"\"))\n"
+        "            if class_name.endswith(\"Runner\") or _is_runner_name(state_name):\n"
+        "                states.append(state)\n"
+        "    except Exception:\n"
+        "        logger.critical(\"failed listing actors via state api\", exc_info=True)\n"
+        "    by_name = {\n"
+        "        str(getattr(state, \"name\", \"\")): state\n"
+        "        for state in states if getattr(state, \"name\", None)\n"
+        "    }\n"
+        "    try:\n"
+        "        for item in list_named_actors(all_namespaces=False):\n"
+        "            name = item.get(\"name\") if isinstance(item, dict) else str(item)\n"
+        "            if _is_runner_name(name) and name not in by_name:\n"
+        "                by_name[name] = SimpleNamespace(name=name, actor_id=name)\n"
+        "    except Exception:\n"
+        "        logger.critical(\"failed listing actors via named actors\", exc_info=True)\n"
+        "    return list(by_name.values())\n"
+    )
+    if "codex override: robust runner discovery" not in text:
+        text += override
 
     path.write_text(text, encoding="utf-8")
 
