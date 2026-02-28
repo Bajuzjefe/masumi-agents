@@ -188,6 +188,50 @@ def _patch_health_auth() -> None:
         path.write_text(text.replace(old, new), encoding="utf-8")
 
 
+def _patch_health_actor_debug() -> None:
+    """Expose named actor snapshot in /health for runtime debugging."""
+    path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/helper.py")
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    if "named_actors_count" in text:
+        return
+    if "from ray.util import list_named_actors" not in text:
+        text = text.replace("import ray\n", "import ray\nfrom ray.util import list_named_actors\n")
+    target = (
+        "    return {\n"
+        "        \"kodosumi_version\": kodosumi.__version__,\n"
+        "        \"python_version\": sys.version,\n"
+        "        \"ray_version\": ray.__version__,\n"
+        "        \"ray_status\": ray.nodes(),\n"
+        "        \"spooler_status\": spooler_status\n"
+        "    }\n"
+    )
+    replacement = (
+        "    named_actors = []\n"
+        "    try:\n"
+        "        for item in list_named_actors(all_namespaces=True):\n"
+        "            if isinstance(item, dict):\n"
+        "                named_actors.append(item.get(\"name\"))\n"
+        "            else:\n"
+        "                named_actors.append(str(item))\n"
+        "    except Exception:\n"
+        "        named_actors = [\"<error>\"]\n"
+        "    return {\n"
+        "        \"kodosumi_version\": kodosumi.__version__,\n"
+        "        \"python_version\": sys.version,\n"
+        "        \"ray_version\": ray.__version__,\n"
+        "        \"ray_status\": ray.nodes(),\n"
+        "        \"spooler_status\": spooler_status,\n"
+        "        \"named_actors_count\": len(named_actors),\n"
+        "        \"named_actors_sample\": sorted(named_actors)[:20],\n"
+        "    }\n"
+    )
+    if target in text:
+        text = text.replace(target, replacement)
+    path.write_text(text, encoding="utf-8")
+
+
 def _patch_spooler_actor_discovery() -> None:
     """Ray compatibility fix: discover Runner actors without requiring Ray state API."""
     path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/spooler.py")
@@ -294,6 +338,8 @@ def main() -> int:
         _patch_inputs_force_https_panel_proxy()
     if _is_true("KODO_PATCH_PROXY_HOST", "true"):
         _patch_proxy_host_forwarding()
+    if _is_true("KODO_PATCH_HEALTH_ACTORS", "true"):
+        _patch_health_actor_debug()
     if _is_true("KODO_PATCH_SPOOLER_DISCOVERY", "true"):
         _patch_spooler_actor_discovery()
     _reset_admin_db_if_requested()
