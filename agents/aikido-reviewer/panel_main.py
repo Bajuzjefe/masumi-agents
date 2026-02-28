@@ -315,6 +315,50 @@ def _patch_store_cross_user_lookup() -> None:
         path.write_text(text, encoding="utf-8")
 
 
+def _patch_health_runner_probe() -> None:
+    """Probe runner actors directly and expose lightweight diagnostics in /health."""
+    path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/helper.py")
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    if "_codex_runner_probe" not in text:
+        text += (
+            "\n\ndef _codex_runner_probe(named_actors):\n"
+            "    probes = []\n"
+            "    for name in named_actors:\n"
+            "        is_fid = isinstance(name, str) and len(name) == 24 and all(ch in '0123456789abcdef' for ch in name.lower())\n"
+            "        if not is_fid:\n"
+            "            continue\n"
+            "        rec = {'fid': name}\n"
+            "        try:\n"
+            "            actor = ray.get_actor(name, namespace=NAMESPACE)\n"
+            "            rec['actor_handle'] = True\n"
+            "            try:\n"
+            "                rec['is_active'] = ray.get(actor.is_active.remote())\n"
+            "            except Exception as exc:\n"
+            "                rec['is_active_error'] = repr(exc)\n"
+            "            try:\n"
+            "                rec['username'] = ray.get(actor.get_username.remote())\n"
+            "            except Exception as exc:\n"
+            "                rec['username_error'] = repr(exc)\n"
+            "        except Exception as exc:\n"
+            "            rec['actor_error'] = repr(exc)\n"
+            "        probes.append(rec)\n"
+            "        if len(probes) >= 10:\n"
+            "            break\n"
+            "    return probes\n"
+        )
+    if "\"runner_probe\":" not in text and "\"named_actors_sample\": sorted(named_actors)[:20]," in text:
+        text = text.replace(
+            "        \"named_actors_sample\": sorted(named_actors)[:20],\n"
+            "        \"state_actors_sample\": state_actors[:20],\n",
+            "        \"named_actors_sample\": sorted(named_actors)[:20],\n"
+            "        \"state_actors_sample\": state_actors[:20],\n"
+            "        \"runner_probe\": _codex_runner_probe(named_actors),\n",
+        )
+    path.write_text(text, encoding="utf-8")
+
+
 def _patch_timeline_cross_user_fallback() -> None:
     """Fallback timeline scope to first non-empty execution user folder."""
     path = Path(
@@ -492,6 +536,8 @@ def main() -> int:
         _patch_serve_user_header_alias()
     if _is_true("KODO_PATCH_HEALTH_ACTORS", "true"):
         _patch_health_actor_debug()
+    if _is_true("KODO_PATCH_HEALTH_RUNNER_PROBE", "true"):
+        _patch_health_runner_probe()
     if _is_true("KODO_PATCH_STORE_CROSS_USER", "true"):
         _patch_store_cross_user_lookup()
     if _is_true("KODO_PATCH_TIMELINE_CROSS_USER", "true"):
