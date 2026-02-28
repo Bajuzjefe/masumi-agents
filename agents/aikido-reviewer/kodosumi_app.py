@@ -112,16 +112,48 @@ def _do_ray_init() -> None:
         if not ray.is_initialized():
             os.environ.setdefault("RAY_USE_MULTIPROCESSING_CPU_COUNT", "1")
             os.environ.setdefault("RAY_DISABLE_DOCKER_CPU_WARNING", "1")
-            ray.init(
-                namespace=os.getenv("KODOSUMI_RAY_NAMESPACE", "kodosumi"),
-                include_dashboard=False,
-                ignore_reinit_error=True,
-                num_cpus=float(os.getenv("KODOSUMI_RAY_NUM_CPUS", "1")),
-                object_store_memory=int(
-                    os.getenv("KODOSUMI_RAY_OBJECT_STORE_MEMORY", "78643200")
-                ),
-                logging_level="WARNING",
+            namespace = os.getenv("KODOSUMI_RAY_NAMESPACE", "kodosumi")
+            attach_first = str(
+                os.getenv("KODOSUMI_RAY_ATTACH_EXISTING", "true")
+            ).strip().lower() in {"1", "true", "yes"}
+            attach_address = (
+                str(os.getenv("KODOSUMI_RAY_ADDRESS", "")).strip()
+                or str(os.getenv("RAY_ADDRESS", "")).strip()
+                or "auto"
             )
+            attached = False
+            if attach_first:
+                try:
+                    ray.init(
+                        address=attach_address,
+                        namespace=namespace,
+                        ignore_reinit_error=True,
+                        logging_level="WARNING",
+                    )
+                    attached = True
+                    logger.info(
+                        "Kodosumi Ray warmup attached to existing cluster (address=%s)",
+                        attach_address,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Kodosumi Ray attach failed (address=%s): %r; "
+                        "falling back to local Ray init",
+                        attach_address,
+                        exc,
+                    )
+            if not attached:
+                ray.init(
+                    namespace=namespace,
+                    include_dashboard=False,
+                    ignore_reinit_error=True,
+                    num_cpus=float(os.getenv("KODOSUMI_RAY_NUM_CPUS", "1")),
+                    object_store_memory=int(
+                        os.getenv("KODOSUMI_RAY_OBJECT_STORE_MEMORY", "78643200")
+                    ),
+                    logging_level="WARNING",
+                )
+                logger.info("Kodosumi Ray warmup started local cluster")
         _ray_ready = True
         _ray_warmup_error = None
         logger.info("Kodosumi Ray warmup complete: %s", ray.available_resources())
