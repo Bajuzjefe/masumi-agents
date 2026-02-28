@@ -65,6 +65,9 @@ def _start_local_ui() -> tuple[subprocess.Popen[bytes] | None, str | None]:
     env = os.environ.copy()
     env["HOST"] = local_ui_host
     env["PORT"] = local_ui_port
+    # Force ui_main/kodosumi_app Ray init to attach to the panel Ray head.
+    env.setdefault("RAY_ADDRESS", "auto")
+    env.setdefault("KODOSUMI_RAY_NAMESPACE", "kodosumi")
     cmd = [sys.executable, "ui_main.py"]
     logger.info("Starting colocated Kodosumi UI: %s", " ".join(cmd))
     process = subprocess.Popen(cmd, env=env)
