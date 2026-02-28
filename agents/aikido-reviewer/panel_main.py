@@ -171,6 +171,13 @@ def _patch_proxy_host_forwarding() -> None:
     if old_lock in text:
         text = text.replace(old_lock, new_lock)
 
+    if "x-kodosumi-user\": request.user" not in text:
+        text = text.replace(
+            "                KODOSUMI_USER: request.user,\n",
+            "                KODOSUMI_USER: request.user,\n"
+            "                \"x-kodosumi-user\": request.user,\n",
+        )
+
     path.write_text(text, encoding="utf-8")
 
 
@@ -184,6 +191,24 @@ def _patch_health_auth() -> None:
         return
     old = 'status_code=200, \n         operation_id="01_health_get")'
     new = 'status_code=200, opt={"no_auth": True}, \n         operation_id="01_health_get")'
+    if old in text:
+        path.write_text(text.replace(old, new), encoding="utf-8")
+
+
+def _patch_serve_user_header_alias() -> None:
+    """Accept hyphenated user header alias in kodosumi ServeAPI middleware."""
+    path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/serve.py")
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    old = "            user = request.headers.get(KODOSUMI_USER, ANNONYMOUS_USER)"
+    new = (
+        "            user = (\n"
+        "                request.headers.get(KODOSUMI_USER)\n"
+        "                or request.headers.get(\"x-kodosumi-user\")\n"
+        "                or ANNONYMOUS_USER\n"
+        "            )"
+    )
     if old in text:
         path.write_text(text.replace(old, new), encoding="utf-8")
 
@@ -368,6 +393,8 @@ def main() -> int:
         _patch_inputs_force_https_panel_proxy()
     if _is_true("KODO_PATCH_PROXY_HOST", "true"):
         _patch_proxy_host_forwarding()
+    if _is_true("KODO_PATCH_SERVE_USER_ALIAS", "true"):
+        _patch_serve_user_header_alias()
     if _is_true("KODO_PATCH_HEALTH_ACTORS", "true"):
         _patch_health_actor_debug()
     if _is_true("KODO_PATCH_SPOOLER_DISCOVERY", "true"):
