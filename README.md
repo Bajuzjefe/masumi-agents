@@ -66,6 +66,7 @@ Set these Railway variables on the Kodosumi panel service:
 - `HOST=0.0.0.0`
 - `PORT=8080`
 - optional one-time reset: `KODO_RESET_ADMIN_DB=true` (set back to `false` after first successful login)
+- optional: `KODO_PATCH_HEALTH_AUTH=true` (recommended on Railway; keeps `/health` publicly checkable for platform probes)
 - optional: `KODO_PATCH_HTTPS_PROXY=true` (recommended on Railway; prevents panel form POST downgrade through proxy)
 - optional: `KODOSUMI_RAY_NUM_CPUS=1`
 - optional: `KODOSUMI_RAY_OBJECT_STORE_MEMORY=78643200`

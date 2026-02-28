@@ -32,6 +32,7 @@ Panel service:
 - `KODO_ADMIN_PASSWORD`
 - `KODO_SECRET_KEY`
 - `KODO_RESET_ADMIN_DB` (`true` once, then `false`)
+- `KODO_PATCH_HEALTH_AUTH` (`true`, recommended on Railway)
 - `KODO_PATCH_HTTPS_PROXY` (`true`, recommended on Railway)
 - `HOST=0.0.0.0`
 - `PORT=8080`
