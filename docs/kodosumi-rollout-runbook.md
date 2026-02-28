@@ -32,6 +32,7 @@ Panel service:
 - `KODO_ADMIN_PASSWORD`
 - `KODO_SECRET_KEY`
 - `KODO_RESET_ADMIN_DB` (`true` once, then `false`)
+- `KODO_PATCH_HTTPS_PROXY` (`true`, recommended on Railway)
 - `HOST=0.0.0.0`
 - `PORT=8080`
 
@@ -59,11 +60,19 @@ Railway-first onboarding (no local runtime required):
    - `GET https://aikido-reviewer-kodosumi-ui-production.up.railway.app/health`
 2. Ensure the panel service is healthy and reachable:
    - `GET https://aikido-reviewer-kodosumi-panel-production.up.railway.app/health`
-3. Register the agent in panel/Koco using OpenAPI from:
+3. Open panel frontend in browser and login:
+   - `https://aikido-reviewer-kodosumi-panel-production.up.railway.app/`
+   - sign in as user `admin` with the credential configured via `KODO_ADMIN_PASSWORD`
+4. Verify admin screens:
+   - `/admin/flow`
+   - `/admin/routes`
+   - `/admin/timeline/view`
+   - `/admin/dashboard`
+5. Register the agent in panel/Koco using OpenAPI from:
    - `https://aikido-reviewer-kodosumi-ui-production.up.railway.app/openapi.json`
-4. Confirm Koco can fetch form schema from:
+6. Confirm Koco can fetch form schema from:
    - `GET https://aikido-reviewer-kodosumi-ui-production.up.railway.app/`
-5. Keep API canary disabled until registration and schema sync are verified:
+7. Keep API canary disabled until registration and schema sync are verified:
    - `KODOSUMI_ENABLED=false`
 
 ## Monitoring checks

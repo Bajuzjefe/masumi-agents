@@ -1,4 +1,4 @@
-"""Railway-safe Kodosumi panel entrypoint."""
+"""Minimal Railway entrypoint for self-hosted Kodosumi panel."""
 
 from __future__ import annotations
 
@@ -23,48 +23,36 @@ def _run(cmd: List[str], check: bool = True) -> int:
     return proc.returncode
 
 
-def _patch_health_auth() -> None:
-    path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/service/health.py")
-    if not path.exists():
-        return
-    text = path.read_text(encoding="utf-8")
-    if 'opt={"no_auth": True}' in text:
-        return
-    old = 'status_code=200, \n         operation_id="01_health_get")'
-    new = 'status_code=200, opt={"no_auth": True}, \n         operation_id="01_health_get")'
-    if old in text:
-        path.write_text(text.replace(old, new), encoding="utf-8")
-
-
-def _patch_proxy_host_forwarding() -> None:
-    path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/service/proxy.py")
-    if not path.exists():
-        return
-    text = path.read_text(encoding="utf-8")
-    needle = 'request_headers.pop("content-length", None)'
-    replacement = 'request_headers.pop("content-length", None)\n            request_headers.pop("host", None)'
-    if needle in text and replacement not in text:
-        path.write_text(text.replace(needle, replacement), encoding="utf-8")
-
-
-def _patch_inputs_internal_auth() -> None:
+def _patch_inputs_force_https_panel_proxy() -> None:
+    """Railway fix: keep internal panel proxy target on HTTPS to avoid POST downgrade."""
     path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/service/inputs/inputs.py")
     if not path.exists():
         return
     text = path.read_text(encoding="utf-8")
-    needle = (
-        "request_headers = dict(request.headers)\n"
-        "            request_headers[KODOSUMI_USER] = request.user"
+    get_old = (
+        "schema_url = str(request.base_url).rstrip(\n"
+        "            \"/\") + f\"/-/{path.lstrip('/')}\""
     )
-    replacement = (
-        "request_headers = dict(request.headers)\n"
-        "            token = request.cookies.get(\"kodosumi_jwt\", \"\")\n"
-        "            if token:\n"
-        "                request_headers[\"KODOSUMI_API_KEY\"] = token\n"
-        "            request_headers[KODOSUMI_USER] = request.user"
+    get_new = (
+        "schema_url = ((f\"https://{request.headers.get('host', '')}\" "
+        "if request.headers.get('host') else str(request.base_url).rstrip(\"/\")) "
+        "+ f\"/-/{path.lstrip('/')}\" )"
     )
-    if needle in text and replacement not in text:
-        path.write_text(text.replace(needle, replacement), encoding="utf-8")
+    post_old = 'schema_url = str(request.base_url).rstrip("/") + f"/-/{path}"'
+    post_new = (
+        "schema_url = ((f\"https://{request.headers.get('host', '')}\" "
+        "if request.headers.get('host') else str(request.base_url).rstrip(\"/\")) "
+        "+ f\"/-/{path.lstrip('/')}\" )"
+    )
+    changed = False
+    if get_old in text:
+        text = text.replace(get_old, get_new)
+        changed = True
+    if post_old in text:
+        text = text.replace(post_old, post_new)
+        changed = True
+    if changed:
+        path.write_text(text, encoding="utf-8")
 
 
 def _reset_admin_db_if_requested() -> None:
@@ -82,22 +70,20 @@ def main() -> int:
     app_server = os.getenv("KODO_APP_SERVER", f"http://{host}:{port}")
     registers = _split_registers(os.getenv("REGISTER_ENDPOINT", ""))
 
-    # Keep runtime pressure low in small Railway containers.
     os.environ.setdefault("RAY_USE_MULTIPROCESSING_CPU_COUNT", "1")
     os.environ.setdefault("RAY_DISABLE_DOCKER_CPU_WARNING", "1")
+    os.environ.setdefault("FORWARDED_ALLOW_IPS", "*")
     os.environ.setdefault("KODO_RAY_SERVER", "localhost:6379")
     os.environ.setdefault("KODO_APP_WORKERS", "1")
     os.environ.setdefault("KODO_APP_STD_LEVEL", "INFO")
     os.environ.setdefault("KODO_UVICORN_LEVEL", "INFO")
     os.environ["KODO_APP_SERVER"] = app_server
 
-    _patch_health_auth()
-    _patch_proxy_host_forwarding()
-    _patch_inputs_internal_auth()
+    if os.getenv("KODO_PATCH_HTTPS_PROXY", "true").strip().lower() in {"1", "true", "yes"}:
+        _patch_inputs_force_https_panel_proxy()
     _reset_admin_db_if_requested()
 
     _run(["ray", "stop", "--force"], check=False)
-
     ray_cmd = [
         "ray",
         "start",
@@ -113,12 +99,12 @@ def main() -> int:
     ]
     _run(ray_cmd, check=True)
 
-    serve_cmd = ["koco", "serve", "--address", app_server]
+    start_cmd = ["koco", "start", "--address", app_server]
     for endpoint in registers:
-        serve_cmd.extend(["--register", endpoint])
+        start_cmd.extend(["--register", endpoint])
 
     try:
-        return subprocess.call(serve_cmd)
+        return subprocess.call(start_cmd)
     finally:
         _run(["ray", "stop", "--force"], check=False)
 

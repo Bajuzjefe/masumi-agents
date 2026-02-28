@@ -11,7 +11,7 @@ masumi==0.1.39
 requests
 
 # Kodosumi runtime (optional — for scaling)
-kodosumi
+kodosumi==1.0.0
 ray[serve]>=2.48.0
 
 # Testing

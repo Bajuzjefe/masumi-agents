@@ -18,7 +18,7 @@ AI-powered triage of [Aikido](https://github.com/Bajuzjefe/aikido) security anal
 `railway.toml` is configured for API service deployment (`agents/aikido-reviewer/Dockerfile`).
 `railway.worker.toml` is provided for the Kodosumi worker service (`agents/aikido-reviewer/Dockerfile.kodosumi-worker`).
 
-Create two Railway services in the same project:
+Create four Railway services in the same project:
 
 1. `aikido-reviewer-api` (public MIP-003 API)
 2. `aikido-reviewer-kodosumi-worker` (internal execution worker)
@@ -60,12 +60,13 @@ Set these Railway variables on the Kodosumi UI service:
 Set these Railway variables on the Kodosumi panel service:
 
 - `REGISTER_ENDPOINT=https://<kodosumi-ui-service>.up.railway.app/openapi.json`
-- `KODO_ADMIN_EMAIL` (for panel login, e.g. `admin@example.com`)
-- `KODO_ADMIN_PASSWORD` (for panel login)
+- `KODO_ADMIN_EMAIL` (admin account contact email, e.g. `admin@example.com`)
+- `KODO_ADMIN_PASSWORD` (password for panel login user `admin`)
 - `KODO_SECRET_KEY` (JWT signing secret for panel auth)
 - `HOST=0.0.0.0`
 - `PORT=8080`
 - optional one-time reset: `KODO_RESET_ADMIN_DB=true` (set back to `false` after first successful login)
+- optional: `KODO_PATCH_HTTPS_PROXY=true` (recommended on Railway; prevents panel form POST downgrade through proxy)
 - optional: `KODOSUMI_RAY_NUM_CPUS=1`
 - optional: `KODOSUMI_RAY_OBJECT_STORE_MEMORY=78643200`
 
@@ -106,7 +107,14 @@ Panel URL to open in browser:
 - `https://<panel-service>.up.railway.app/`
 
 Important: the `kodosumi-ui` URL is not the panel frontend. It is the OpenAPI/form app that the panel registers.
-Panel `/health` will report `spooler_status.error = "Spooler not found"` in this Railway profile; this is expected for UI/control-plane use.
+Panel login username is always `admin`; password is `KODO_ADMIN_PASSWORD`.
+Panel routes to use after login:
+- `/admin/flow`
+- `/admin/routes`
+- `/admin/timeline/view`
+- `/admin/dashboard`
+
+If you `curl` panel root without browser-style HTML accept headers, a `401` JSON response is expected. Open the URL in browser for the frontend UI.
 
 ### 1. Start Masumi node
 
