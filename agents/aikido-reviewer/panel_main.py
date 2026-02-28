@@ -189,28 +189,79 @@ def _patch_health_auth() -> None:
 
 
 def _patch_spooler_actor_discovery() -> None:
-    """Ray compatibility fix: discover Runner actors even when class_name is fully-qualified."""
+    """Ray compatibility fix: discover Runner actors without requiring Ray state API."""
     path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/spooler.py")
     if not path.exists():
         return
     text = path.read_text(encoding="utf-8")
-    if "endswith(\"Runner\")" in text:
+    if "_list_runner_states" in text and "list_named_actors" in text:
         return
-    old = (
+
+    if "from ray.util import list_named_actors" not in text:
+        text = text.replace(
+            "from ray.util.state import list_actors\n",
+            "from ray.util.state import list_actors\nfrom ray.util import list_named_actors\n",
+        )
+
+    helper = (
+        "\n\ndef _is_runner_name(name: str) -> bool:\n"
+        "    if not name or name in {\"Spooler\", \"register\"}:\n"
+        "        return False\n"
+        "    if len(name) != 24:\n"
+        "        return False\n"
+        "    return all(ch in \"0123456789abcdef\" for ch in name.lower())\n"
+        "\n\n"
+        "def _list_runner_states():\n"
+        "    from types import SimpleNamespace\n"
+        "    try:\n"
+        "        states = list_actors(filters=[(\"state\", \"=\", \"ALIVE\")])\n"
+        "        return [\n"
+        "            state for state in states\n"
+        "            if str(getattr(state, \"class_name\", \"\")).endswith(\"Runner\")\n"
+        "        ]\n"
+        "    except Exception:\n"
+        "        logger.critical(\"failed listing actors via state api\", exc_info=True)\n"
+        "        out = []\n"
+        "        try:\n"
+        "            for item in list_named_actors(all_namespaces=False):\n"
+        "                name = item.get(\"name\") if isinstance(item, dict) else str(item)\n"
+        "                if _is_runner_name(name):\n"
+        "                    out.append(SimpleNamespace(name=name, actor_id=name))\n"
+        "        except Exception:\n"
+        "            logger.critical(\"failed listing actors via named actors\", exc_info=True)\n"
+        "        return out\n"
+    )
+    if "def _is_runner_name(name: str)" not in text:
+        text = text.replace("@ray.remote\nclass SpoolerLock:", helper + "\n\n@ray.remote\nclass SpoolerLock:")
+
+    old_block_original = (
+        "            try:\n"
         "                states = list_actors(filters=[\n"
         "                    (\"class_name\", \"=\", \"Runner\"), \n"
-        "                    (\"state\", \"=\", \"ALIVE\")])"
+        "                    (\"state\", \"=\", \"ALIVE\")])\n"
+        "            except Exception as e:\n"
+        "                logger.critical(f\"failed listing names actors\", exc_info=True)\n"
+        "                states = []"
     )
-    new = (
+    old_block_patched = (
+        "            try:\n"
         "                states = list_actors(filters=[\n"
         "                    (\"state\", \"=\", \"ALIVE\")])\n"
         "                states = [\n"
         "                    state for state in states\n"
         "                    if str(getattr(state, \"class_name\", \"\")).endswith(\"Runner\")\n"
-        "                ]"
+        "                ]\n"
+        "            except Exception as e:\n"
+        "                logger.critical(f\"failed listing names actors\", exc_info=True)\n"
+        "                states = []"
     )
-    if old in text:
-        path.write_text(text.replace(old, new), encoding="utf-8")
+    replacement = "            states = _list_runner_states()"
+    if old_block_original in text:
+        text = text.replace(old_block_original, replacement)
+    if old_block_patched in text:
+        text = text.replace(old_block_patched, replacement)
+
+    path.write_text(text, encoding="utf-8")
 
 
 def _reset_admin_db_if_requested() -> None:
