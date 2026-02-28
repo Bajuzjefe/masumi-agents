@@ -569,6 +569,11 @@ def main() -> int:
     os.environ.setdefault("KODO_APP_WORKERS", "1")
     os.environ.setdefault("KODO_APP_STD_LEVEL", "INFO")
     os.environ.setdefault("KODO_UVICORN_LEVEL", "INFO")
+    # Keep colocated UI and panel on the same Ray cluster; never silently
+    # fall back to a private local cluster in the UI process.
+    os.environ.setdefault("KODOSUMI_RAY_ADDRESS", "auto")
+    os.environ.setdefault("KODOSUMI_RAY_ATTACH_EXISTING", "true")
+    os.environ.setdefault("KODOSUMI_RAY_ATTACH_REQUIRED", "true")
     os.environ["KODO_APP_SERVER"] = app_server
 
     if _is_true("KODO_PATCH_HEALTH_AUTH", "true"):
