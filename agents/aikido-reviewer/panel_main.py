@@ -279,20 +279,27 @@ def _patch_store_cross_user_lookup() -> None:
     if not path.exists():
         return
     text = path.read_text(encoding="utf-8")
-    if "cross-user fallback for Railway runtime" in text:
+    if "codex override: cross-user connect fallback" in text:
         return
-    target = (
+    text += (
+        "\n\n# codex override: cross-user connect fallback\n"
+        "async def _codex_connect_with_fallback(fid: str,\n"
+        "                                       user: str,\n"
+        "                                       state: State,\n"
+        "                                       extended: bool):\n"
+        "    db_file = Path(state[\"settings\"].EXEC_DIR).joinpath(user, fid, DB_FILE)\n"
+        "    waitfor = state[\"settings\"].WAIT_FOR_JOB if extended else SHORT_WAIT\n"
+        "    loop = False\n"
+        "    t0 = helper.now()\n"
+        "    while not db_file.exists():\n"
+        "        if not loop:\n"
+        "            loop = True\n"
+        "        await asyncio.sleep(SLEEP)\n"
         "        if helper.now() > t0 + waitfor:\n"
-        "            raise NotFoundException(\n"
-        "                f\"Execution {fid} not found after {waitfor}s.\")"
-    )
-    replacement = (
-        "        if helper.now() > t0 + waitfor:\n"
-        "            # cross-user fallback for Railway runtime\n"
         "            exec_root = Path(state[\"settings\"].EXEC_DIR)\n"
         "            found = None\n"
         "            if exec_root.exists():\n"
-        "                for user_dir in exec_root.iterdir():\n"
+        "                for user_dir in sorted(exec_root.iterdir(), key=lambda d: d.name):\n"
         "                    if not user_dir.is_dir():\n"
         "                        continue\n"
         "                    for candidate in (\n"
@@ -308,11 +315,18 @@ def _patch_store_cross_user_lookup() -> None:
         "                raise NotFoundException(\n"
         "                    f\"Execution {fid} not found after {waitfor}s.\")\n"
         "            db_file = found\n"
-        "            break"
+        "            break\n"
+        "    if loop:\n"
+        "        logger.debug(f\"{fid} - found after {now() - t0:.2f}s\")\n"
+        "    conn = sqlite3.connect(str(db_file), isolation_level=None)\n"
+        "    conn.execute('pragma journal_mode=wal;')\n"
+        "    conn.execute('pragma synchronous=normal;')\n"
+        "    conn.execute('pragma read_uncommitted=true;')\n"
+        "    return (conn, db_file)\n"
+        "\n"
+        "connect = _codex_connect_with_fallback\n"
     )
-    if target in text:
-        text = text.replace(target, replacement)
-        path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
 
 
 def _patch_health_runner_probe() -> None:
