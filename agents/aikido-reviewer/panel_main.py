@@ -247,7 +247,7 @@ def main() -> int:
         _patch_spooler_actor_discovery()
     _reset_admin_db_if_requested()
 
-    include_dashboard = "true" if _is_true("KODOSUMI_RAY_INCLUDE_DASHBOARD", "true") else "false"
+    include_dashboard = "true" if _is_true("KODOSUMI_RAY_INCLUDE_DASHBOARD", "false") else "false"
 
     _run(["ray", "stop", "--force"], check=False)
     ray_cmd = [
