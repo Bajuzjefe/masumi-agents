@@ -56,19 +56,59 @@ def _patch_inputs_force_https_panel_proxy() -> None:
 
 
 def _patch_proxy_host_forwarding() -> None:
-    """Railway fix: do not forward panel host header when proxying to registered app."""
+    """Railway fix: sanitize forwarded headers so Host never loops proxy traffic back to panel."""
     path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/service/proxy.py")
     if not path.exists():
         return
     text = path.read_text(encoding="utf-8")
-    needle = 'request_headers.pop("content-length", None)'
-    replacement = (
-        'request_headers.pop("content-length", None)\n'
-        '            request_headers.pop("host", None)\n'
-        '            request_headers.pop("Host", None)'
+    old_forward = (
+        "request_headers = dict(request.headers)\n"
+        "            request_headers[KODOSUMI_USER] = request.user\n"
+        "            request_headers[KODOSUMI_BASE] = base\n"
+        "            request_headers[KODOSUMI_URL] = str(request.base_url)\n"
+        "            host = request.headers.get(\"host\", None)\n"
+        "            body = await request.body()\n"
+        "            request_headers.pop(\"content-length\", None)"
     )
-    if needle in text and replacement not in text:
-        path.write_text(text.replace(needle, replacement), encoding="utf-8")
+    new_forward = (
+        "request_headers = {\n"
+        "                KODOSUMI_USER: request.user,\n"
+        "                KODOSUMI_BASE: base,\n"
+        "                KODOSUMI_URL: str(request.base_url),\n"
+        "            }\n"
+        "            for key in (\"accept\", \"content-type\", \"authorization\"):\n"
+        "                value = request.headers.get(key)\n"
+        "                if value:\n"
+        "                    request_headers[key] = value\n"
+        "            host = request.headers.get(\"host\", None)\n"
+        "            body = await request.body()"
+    )
+    if old_forward in text:
+        text = text.replace(old_forward, new_forward)
+
+    old_lock = (
+        "request_headers = dict(request.headers)\n"
+        "            request_headers[KODOSUMI_USER] = request.user\n"
+        "            # request_headers[KODOSUMI_BASE] = base\n"
+        "            host = request.headers.get(\"host\", None)\n"
+        "            body = await request.body()\n"
+        "            request_headers.pop(\"content-length\", None)"
+    )
+    new_lock = (
+        "request_headers = {\n"
+        "                KODOSUMI_USER: request.user,\n"
+        "            }\n"
+        "            for key in (\"accept\", \"content-type\", \"authorization\"):\n"
+        "                value = request.headers.get(key)\n"
+        "                if value:\n"
+        "                    request_headers[key] = value\n"
+        "            host = request.headers.get(\"host\", None)\n"
+        "            body = await request.body()"
+    )
+    if old_lock in text:
+        text = text.replace(old_lock, new_lock)
+
+    path.write_text(text, encoding="utf-8")
 
 
 def _patch_health_auth() -> None:
