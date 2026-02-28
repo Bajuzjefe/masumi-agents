@@ -60,6 +60,18 @@ Railway-first onboarding (no local runtime required):
   - compare canary vs control `duration_ms`
 - Payment completion:
   - no increase in `awaiting_payment` stalls
+- Kodosumi UI launch health:
+  - `POST /` should return a `result` flow id, not Ray startup errors
+
+## Known blocker + mitigation
+
+- Symptom: `The current node timed out during startup` from Ray on Railway UI service.
+- Mitigation:
+  - keep UI Ray footprint small with:
+    - `KODOSUMI_RAY_NUM_CPUS=1`
+    - `KODOSUMI_RAY_OBJECT_STORE_MEMORY=78643200`
+  - keep launch request bounded:
+    - `KODOSUMI_LAUNCH_TIMEOUT_SECONDS=20`
 
 ## Rollback
 

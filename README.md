@@ -51,6 +51,9 @@ Set these Railway variables on the Kodosumi UI service:
 - `ANTHROPIC_API_KEY`
 - `HOST=0.0.0.0`
 - `PORT=8031`
+- `KODOSUMI_LAUNCH_TIMEOUT_SECONDS=20`
+- `KODOSUMI_RAY_NUM_CPUS=1`
+- `KODOSUMI_RAY_OBJECT_STORE_MEMORY=78643200`
 - optional: `KODOSUMI_INTERNAL_TOKEN` (only needed if you also expose internal execution on same runtime)
 
 Optional (auto-scan tuning):

@@ -8,7 +8,11 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from kodosumi_app import IMPORT_ERROR_DETAIL, app as kodosumi_form_app
+from kodosumi_app import (
+    IMPORT_ERROR_DETAIL,
+    app as kodosumi_form_app,
+    trigger_ray_warmup,
+)
 
 ui_app = FastAPI(
     title="Aikido Reviewer Kodosumi UI",
@@ -23,6 +27,11 @@ ui_app = FastAPI(
 @ui_app.get("/health")
 async def health() -> dict:
     return {"status": "healthy", "service": "aikido-reviewer-kodosumi-ui"}
+
+
+@ui_app.on_event("startup")
+async def start_ray_warmup() -> None:
+    trigger_ray_warmup()
 
 
 if kodosumi_form_app is not None:

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import threading
 import time
 from typing import Any, Dict
 
@@ -94,6 +96,48 @@ async def run_review_flow(inputs: Dict[str, Any], tracer: Any = None) -> Dict[st
         "source_files": inputs.get("source_files", "{}"),
         "review_depth": "deep",
     })
+
+
+_ray_warmup_lock = threading.Lock()
+_ray_warmup_started = False
+_ray_ready = False
+_ray_warmup_error: str | None = None
+
+
+def _do_ray_init() -> None:
+    global _ray_ready, _ray_warmup_error
+    import ray
+
+    try:
+        if not ray.is_initialized():
+            os.environ.setdefault("RAY_USE_MULTIPROCESSING_CPU_COUNT", "1")
+            os.environ.setdefault("RAY_DISABLE_DOCKER_CPU_WARNING", "1")
+            ray.init(
+                namespace=os.getenv("KODOSUMI_RAY_NAMESPACE", "kodosumi"),
+                include_dashboard=False,
+                ignore_reinit_error=True,
+                num_cpus=float(os.getenv("KODOSUMI_RAY_NUM_CPUS", "1")),
+                object_store_memory=int(
+                    os.getenv("KODOSUMI_RAY_OBJECT_STORE_MEMORY", "78643200")
+                ),
+                logging_level="WARNING",
+            )
+        _ray_ready = True
+        _ray_warmup_error = None
+        logger.info("Kodosumi Ray warmup complete: %s", ray.available_resources())
+    except Exception as exc:
+        _ray_ready = False
+        _ray_warmup_error = repr(exc)
+        logger.warning("Kodosumi Ray warmup failed: %r", exc)
+
+
+def trigger_ray_warmup() -> None:
+    global _ray_warmup_started
+    with _ray_warmup_lock:
+        if _ray_warmup_started:
+            return
+        _ray_warmup_started = True
+    _do_ray_init()
 
 
 machine_app = FastAPI(
@@ -193,15 +237,45 @@ if ServeAPI is not None and F is not None and Launch is not None and InputsError
             raise InputsError(aikido_report="Invalid JSON in aikido_report")
 
         logger.info("Kodosumi form review start: findings=%d depth=%s", total, review_depth)
-        return Launch(
-            request,
-            "kodosumi_app:run_review_flow",
-            inputs={
-                "aikido_report": aikido_report,
-                "source_files": source_files,
-                "review_depth": review_depth,
-            },
-        )
+        if not _ray_ready:
+            if _ray_warmup_error:
+                raise InputsError(
+                    _global_=(
+                        "Kodosumi runtime failed to initialize. "
+                        f"Please retry. Last error: {_ray_warmup_error}"
+                    )
+                )
+            raise InputsError(
+                _global_="Kodosumi runtime is warming up. Please retry in a few seconds."
+            )
+
+        def _launch() -> Any:
+            return Launch(
+                request,
+                "kodosumi_app:run_review_flow",
+                inputs={
+                    "aikido_report": aikido_report,
+                    "source_files": source_files,
+                    "review_depth": review_depth,
+                },
+            )
+
+        launch_timeout = float(os.getenv("KODOSUMI_LAUNCH_TIMEOUT_SECONDS", "20"))
+        try:
+            response = await asyncio.wait_for(asyncio.to_thread(_launch), timeout=launch_timeout)
+        except TimeoutError:
+            raise InputsError(
+                _global_=(
+                    "Kodosumi runtime is busy starting resources. "
+                    "Please retry in a few seconds."
+                )
+            )
+        except Exception as exc:
+            raise InputsError(
+                _global_=(f"Kodosumi launch failed: {exc!r}")
+            )
+
+        return response
 else:
     app = None
     if IMPORT_ERROR_DETAIL:
