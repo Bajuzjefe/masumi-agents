@@ -22,6 +22,7 @@ Create two Railway services in the same project:
 
 1. `aikido-reviewer-api` (public MIP-003 API)
 2. `aikido-reviewer-kodosumi-worker` (internal execution worker)
+3. `aikido-reviewer-kodosumi-ui` (public Kodosumi UI + OpenAPI for koco register)
 
 Set these Railway variables on the API service:
 
@@ -45,6 +46,13 @@ Set these Railway variables on the worker service:
 - `HOST=0.0.0.0`
 - `PORT=8021`
 
+Set these Railway variables on the Kodosumi UI service:
+
+- `ANTHROPIC_API_KEY`
+- `HOST=0.0.0.0`
+- `PORT=8031`
+- optional: `KODOSUMI_INTERNAL_TOKEN` (only needed if you also expose internal execution on same runtime)
+
 Optional (auto-scan tuning):
 - `AIKIDO_TIMEOUT_SECONDS`
 - `AIKIDO_GIT_CLONE_TIMEOUT_SECONDS`
@@ -59,6 +67,14 @@ cp railway.toml railway.current.toml
 # Worker service (set in Railway service settings or deploy from this file)
 cp railway.worker.toml railway.current.toml
 ```
+
+For the UI service use Dockerfile:
+
+- `agents/aikido-reviewer/Dockerfile.kodosumi-ui`
+
+Start command is baked into image:
+
+- `python ui_main.py`
 
 ### 1. Start Masumi node
 
