@@ -186,6 +186,31 @@ def _patch_health_auth() -> None:
         path.write_text(text.replace(old, new), encoding="utf-8")
 
 
+def _patch_spooler_actor_discovery() -> None:
+    """Ray compatibility fix: discover Runner actors even when class_name is fully-qualified."""
+    path = Path("/usr/local/lib/python3.11/site-packages/kodosumi/spooler.py")
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    if "endswith(\"Runner\")" in text:
+        return
+    old = (
+        "                states = list_actors(filters=[\n"
+        "                    (\"class_name\", \"=\", \"Runner\"), \n"
+        "                    (\"state\", \"=\", \"ALIVE\")])"
+    )
+    new = (
+        "                states = list_actors(filters=[\n"
+        "                    (\"state\", \"=\", \"ALIVE\")])\n"
+        "                states = [\n"
+        "                    state for state in states\n"
+        "                    if str(getattr(state, \"class_name\", \"\")).endswith(\"Runner\")\n"
+        "                ]"
+    )
+    if old in text:
+        path.write_text(text.replace(old, new), encoding="utf-8")
+
+
 def _reset_admin_db_if_requested() -> None:
     if os.getenv("KODO_RESET_ADMIN_DB", "").strip().lower() not in {"1", "true", "yes"}:
         return
@@ -216,6 +241,8 @@ def main() -> int:
         _patch_inputs_force_https_panel_proxy()
     if _is_true("KODO_PATCH_PROXY_HOST", "true"):
         _patch_proxy_host_forwarding()
+    if _is_true("KODO_PATCH_SPOOLER_DISCOVERY", "true"):
+        _patch_spooler_actor_discovery()
     _reset_admin_db_if_requested()
 
     _run(["ray", "stop", "--force"], check=False)
